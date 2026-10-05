@@ -25,8 +25,8 @@ These releases use **Bunny spec 3**. Install from the `manifest.json` URL, then 
 | [InstallLinks](InstallLinks/) | 1.0.7 | `snow://` install-plugin links. Copies manifest URLs with manual installation steps. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/InstallLinks/manifest.json) |
 | [TokenUtils](TokenUtils/) | 1.0.2 | `/get-token` copy alert and `/token-info` username, display name, email, number. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/TokenUtils/manifest.json) |
 | [GlobalBadges](GlobalBadges/) | 1.1.1 | Profile badges from EquiBadges and ObaWorkshop BadgeVault. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/GlobalBadges/manifest.json) |
-| [NightyTab](NightyTab/) | 1.0.0 | Nighty in mobile settings, with optional Download Script replies. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/NightyTab/manifest.json) |
-| [PinDms](PinDms/) | 1.0.0 | Per-account DM categories, colors, ordering and collapsible sections for mobile. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/PinDms/manifest.json) |
+| [NightyTab](NightyTab/) | 1.0.1 | Nighty in mobile settings, with optional Download Script replies. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/NightyTab/manifest.json) |
+| [PinDms](PinDms/) | 1.0.1 | Per-account DM categories, colors, ordering and collapsible sections for mobile. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/PinDms/manifest.json) |
 | [IconThemer](IconThemer/) | 1.0.2 | Icon packs and per-icon colors. | [Install](https://raw.githubusercontent.com/xMimiez/Snow-Plugins/main/IconThemer/manifest.json) |
 
 ## Snow install links
@@ -48,3 +48,5 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for original authors, sourc
 See [SDK_AUDIT.md](SDK_AUDIT.md) for the authoring-guide review.
 
 See [PORTING_REPORT.md](PORTING_REPORT.md) for SDK checks, mobile differences and the device test checklist.
+
+See [MOBILE_UI_UPDATE.md](MOBILE_UI_UPDATE.md) for the NightyTab and PinDms 1.0.1 changes.

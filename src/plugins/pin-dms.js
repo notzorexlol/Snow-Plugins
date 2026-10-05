@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { ui } from '../runtime.js';
 import { registerSection } from '../settings-section.js';
-import { patchLazySheet } from '../action-sheet.js';
+import { appendAction, patchLazySheet } from '../action-sheet.js';
+import { createInboxAdapter } from './pin-dms-list.js';
 import { createPinData, sectionsFor, DEFAULT_COLOR, SWATCHES } from './pin-dms-data.js';
 
 export default function PinDms(r) {
@@ -100,7 +101,7 @@ export default function PinDms(r) {
         const uncategorized = section.id === 'uncategorized';
         return h(RN.Pressable, {
             accessibilityRole: 'button', accessibilityLabel: section.name,
-            accessibilityState: { expanded: !section.collapsed }, style: { padding: 12 },
+            accessibilityState: { expanded: !section.collapsed }, style: { height: 48, paddingHorizontal: 12, justifyContent: 'center' },
             onPress: guard(() => uncategorized ? store.canCollapseDmSection && r.set('dmSectionCollapsed', !store.dmSectionCollapsed) : data.collapse(section.id)),
             onLongPress: uncategorized ? undefined : () => r.open('category-actions', CategoryActions, { categoryId: section.id }),
         }, h(Text, { heading: true, style: section.color != null ? { color: '#' + section.color.toString(16).padStart(6, '0') } : undefined }, `${section.collapsed ? '▸' : '▾'} ${section.name}`));
@@ -125,41 +126,41 @@ export default function PinDms(r) {
                 : h(RN.ScrollView || RN.View, null, ...list.map(s => h(RN.View, { key: s.id }, h(Header, { section: s }), ...s.data.map(id => h(DmRow, { key: id, id, close }))))),
             close ? h(Button, { text: 'Close', onPress: close }) : null);
     }
-    // Only adapt lists whose complete dataset consists of actual private-channel store records.
-    // Unknown list representations are left alone and remain available through the settings page.
-    function NativeList({ original }) {
-        useStores();
-        const props = original.props;
-        const recordId = value => typeof value === 'string' ? value : value?.channel?.id || value?.id;
-        const values = new Map(props.data.map(value => [recordId(value), value]));
-        const list = sectionsFor(data.categories(), store, [...values.keys()], selected(), id => values.has(id));
-        const originalIndices = new Map(props.data.map((v, i) => [recordId(v), i]));
-        const rows = list.flatMap(s => [{ header: s, key: `mime-pins-${s.id}` }, ...s.data.map(id => ({ id,
-            key: props.keyExtractor ? props.keyExtractor(values.get(id), originalIndices.get(id)) : id }))]);
-        if (!r.active || !store.nativeList) return original;
-        return React.cloneElement(original, {
-            data: rows, extraData: store.userBasedCategoryList, getItemLayout: undefined,
-            keyExtractor: item => item.key,
-            renderItem: info => info.item.header ? h(Header, { section: info.item.header })
-                : props.renderItem({ ...info, item: values.get(info.item.id), index: originalIndices.get(info.item.id) }),
-            onViewableItemsChanged: undefined, initialScrollIndex: undefined,
-        });
+    const adaptList = createInboxAdapter(r, { data, recent, selected, getChannel, Header });
+    function menuChannel(props) {
+        if (props?.message) return null;
+        const channel = props?.channel || getChannel(props?.channelId);
+        if (isDm(channel)) return channel;
+        const userId = props?.userId || props?.user?.id;
+        return userId ? recent().map(getChannel).find(c => c?.type === 1 && c.recipients?.includes(userId)) : null;
     }
-    function adaptList(element) {
-        const props = element.props;
-        if (!store.nativeList || !Array.isArray(props?.data) || !props.data.length || typeof props.renderItem !== 'function') return;
-        // Do not reinterpret arbitrary lists or search results.
-        if (Object.getOwnPropertyDescriptor(props, 'ref')?.value || Object.getOwnPropertyDescriptor(element, 'ref')?.value || props.onViewableItemsChanged || props.viewabilityConfigCallbackPairs || props.initialScrollIndex != null || props.getItemLayout || props.searchQuery) return;
-        if (!props.data.every(value => {
-            const id = typeof value === 'string' ? value : value?.channel?.id || value?.id;
-            const channel = getChannel(id);
-            return isDm(channel) && (typeof value === 'string' || value === channel || value.channel === channel);
-        })) return;
-        const ids = new Set(props.data.map(value => typeof value === 'string' ? value : value.channel?.id || value.id));
-        const inbox = recent().filter(id => isDm(getChannel(id)));
-        if (ids.size !== inbox.length || !inbox.every(id => ids.has(id))) return;
-        r.status.nativeList = true;
-        return h(NativeList, { original: element });
+    function menuItem(props) {
+        const channel = menuChannel(props);
+        if (!channel) return null;
+        return { key: 'mime-pin-dms', label: 'Pin DMs', onPress: guard(() => r.open('channel-actions', ChannelActions, { channelId: channel.id })) };
+    }
+    function patchChannelMenu() {
+        // Rain permissionviewer/jumptotop show this module returning a second component.
+        // Wrap that returned element, retaining each opening's props and original actions.
+        const module = r.byName('ChannelLongPressActionSheet', true);
+        const wrappers = new WeakMap();
+        return r.patch('after', module, 'default', (_args, element) => {
+            if (!r.active || !React.isValidElement(element) || !menuItem(element.props)) return;
+            const Original = element.type;
+            if (typeof Original !== 'function' || Original.prototype?.isReactComponent) return;
+            if (!wrappers.has(Original)) wrappers.set(Original, function WithPinActions(props) {
+                const tree = Original(props), item = r.active ? menuItem(props) : null;
+                if (!item) return tree;
+                return appendAction(r, tree, { ...item, onPress: () => {
+                    if (!r.active) return;
+                    r.find('hideActionSheet')?.hideActionSheet();
+                    item.onPress();
+                } });
+            });
+            const ref = Object.getOwnPropertyDescriptor(element, 'ref')?.value || Object.getOwnPropertyDescriptor(element.props, 'ref')?.value;
+            if (ref) return;
+            return h(wrappers.get(Original), { ...element.props, key: element.key });
+        });
     }
     function Settings({ close }) {
         useStores();
@@ -168,19 +169,33 @@ export default function PinDms(r) {
             h(Button, { text: `Order: ${store.pinOrder === 1 ? 'Custom' : 'Most recent message'}`, onPress: () => r.set('pinOrder', store.pinOrder === 1 ? 0 : 1) }),
             h(Toggle, { setting: 'canCollapseDmSection', label: 'Allow collapsing uncategorized DMs' }),
             h(Toggle, { setting: 'nativeList', label: 'Categories in compatible native DM lists' }),
-            h(Text, { muted: true }, `Settings entry: ${r.status.settingsEntry ? 'registered' : 'unavailable'} · Native list: ${r.status.nativeList ? 'matched' : 'not yet matched; use Open pinned DMs'}`));
+            h(Text, { muted: true }, `Hold a DM to add a category or pin it. ${r.status.nativeList ? 'Categories are connected to your DM list.' : 'Open your DM list to connect categories; Open pinned DMs is also available.'}`));
+    }
+    function wrapDmRow(element, props = element.props) {
+        const channel = props?.channel;
+        if (!isDm(channel)) return;
+        const open = guard(() => r.open('channel-actions', ChannelActions, { channelId: channel.id }));
+        return h(RN.Pressable, {
+            ...(element.key != null ? { key: element.key } : {}),
+            onPress: event => { event?.stopPropagation?.(); if (props.onPress) props.onPress(event); else openDm(channel.id); },
+            onLongPress: event => { event?.stopPropagation?.(); open(); },
+            accessibilityActions: [{ name: 'pin-dms', label: 'Pin DMs' }],
+            onAccessibilityAction: event => { if (event.nativeEvent.actionName === 'pin-dms') open(); },
+        }, element);
     }
     return { Settings, PinsPage, ChannelActions, CategoryActions, Editor, data, sections, adaptList, start() {
         r.status.settingsEntry = registerSection(r, { name: 'Pin DMs', items: [{ key: 'MIME_PIN_DMS', title: () => 'Pinned DMs', render: async () => ({ default: PinsPage }) }] });
-        r.status.channelMenu = patchLazySheet(r, (_key, props) => isDm(props?.channel) && !props?.message
-            ? { key: 'mime-pin-dms', label: 'Pin DMs', onPress: () => r.open('channel-actions', ChannelActions, { channelId: props.channel.id }) } : null);
-        r.hook(['FlatList', 'AnimatedFlatList'], adaptList);
-        // This documented mobile row exists even when the surrounding list format changes.
-        r.hook(['MessagesItemChannelContent'], element => {
-            const channel = element.props?.channel;
-            if (!isDm(channel)) return;
-            return h(RN.Pressable, { onLongPress: () => r.open('channel-actions', ChannelActions, { channelId: channel.id }) }, element);
-        });
+        r.status.channelMenu = !!patchChannelMenu();
+        const lazyMenu = patchLazySheet(r, (_key, props) => menuItem(props));
+        r.status.channelMenu = r.status.channelMenu || !!lazyMenu;
+        r.hook(['FlatList', 'AnimatedFlatList', 'FlashList'], adaptList);
+        // Bind by export identity as well as name: production component names can be minified.
+        const FlashList = r.D.FlashList || r.find('FlashList')?.FlashList;
+        if (FlashList) r.patch('after', React, 'createElement', (args, result) => args[0] === FlashList ? adaptList(result) : undefined);
+        let rowModule;
+        try { rowModule = r.B.metro.findByTypeName?.('MessagesItemChannelContent'); } catch {}
+        const rowPatched = r.patch('after', rowModule, 'type', (args, result) => r.active && React.isValidElement(result) ? wrapDmRow(result, args[0]) : undefined);
+        if (!rowPatched) r.hook(['MessagesItemChannelContent'], element => wrapDmRow(element));
     } };
 }
 PinDms.defaults = { pinOrder: 0, canCollapseDmSection: false, dmSectionCollapsed: false, userBasedCategoryList: {}, nativeList: true };

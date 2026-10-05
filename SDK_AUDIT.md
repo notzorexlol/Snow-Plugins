@@ -36,17 +36,19 @@ Every existing package is patch-bumped because it embeds the changed runtime. Ve
 | TokenUtils | Existing feature retained, scoped alert cleanup tested | Its explicit token-copy action is user-triggered; no real account used in tests |
 | GlobalBadges | Shared contracts and startup/settings/stop checks | Upstream badge feeds and native profile rows |
 | IconThemer | Only 331 catalog JSX hooks; removes generic hooks and React.createElement patch | Actual hook coverage and image rendering |
-| NightyTab | Rain settings route, isolated WebView, toggle/prefix/attachment-gated reply action, native message accessors | WebView availability/login and native message sheet shape |
+| NightyTab | Rain settings route, isolated WebView, toggle/prefix/attachment-gated reply action, native message accessors | WebView availability/login, native back gestures and message sheet shape |
 | PinDms | Per-account category data, saved editor retry, touch UI, Rain settings, guarded native list adapter | Actual Discord inbox layout and scrolling behavior |
 
 ## Source-backed private integrations
 
 Rain's settings core demonstrates `SETTING_RENDERER_CONFIG`, `createList`, navigation screen registration and native settings rows. Each plugin owns its scoped list patch; shared route/config state persists until the last participating plugin stops. Rain's View Raw demonstrates the lazy `MessageLongPressActionSheet` flow. Each opening retains its own message, and class/memo component forms that cannot be safely wrapped are left alone.
 
-Rain's server drawer and row patches provide evidence for channel navigation, private-channel stores and `MessagesItemChannelContent`. They do not establish every current Discord inbox list shape. PinDms only adapts complete, recognized FlatList datasets and declines ref/layout/viewability/search contracts it cannot preserve. Its own Pinned DMs page remains available. This is not a claim of universal primary-list placement.
+Rain's server drawer and row patches provide evidence for channel navigation, private-channel stores and `MessagesItemChannelContent`. They do not establish every current Discord inbox list shape. PinDms adapts complete, recognized FlatList/FlashList DM blocks, translating refs/layout/viewability callbacks while preserving native row renderers and surrounding auxiliary rows. Partial/search, horizontal, inverted, multi-column and sticky-index layouts are declined. Its own Pinned DMs page remains available. This is not a claim of universal primary-list placement.
 
 The guide cannot validate all private Metro modules used by the pre-existing plugins. No unsupported public namespace was added to compensate. Device checks and explicit mobile differences are recorded in PORTING_REPORT.md. Desktop keyboard navigation, Electron cookie/header interception and a token-capture bridge are not implemented as mobile features.
 
 ## Verification
 
-`npm run build` and `npm test`: 47 tests pass. Coverage includes all production bundle start/settings/stop paths, manifest limits, registrar mutation, storage isolation/migration, subscriptions, request-client credential isolation, rate limits, timer cancellation, settings coexistence/unload order, Nighty menu identity and gating, per-account PinDms operations and compatible native list rendering. Network operations are mocked. No real messages, gift redemptions, uploads, server changes, account reads or clipboard token actions were performed.
+`npm run build` and `npm test`: 50 tests pass. Coverage includes all production bundle start/settings/stop paths, manifest limits, registrar mutation, storage isolation/migration, subscriptions, request-client credential isolation, rate limits, timer cancellation, settings coexistence/unload order, Nighty menu identity and gating, per-account PinDms operations and compatible native list rendering. Network operations are mocked. No real messages, gift redemptions, uploads, server changes, account reads or clipboard token actions were performed.
+
+The 1.0.1 follow-up is documented in MOBILE_UI_UPDATE.md.

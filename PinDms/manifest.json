@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.pindms",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "display": {
     "name": "Pin DMs",
     "description": "Per-account DM categories, colors, ordering and collapsible sections for mobile.",
