@@ -21,7 +21,7 @@ export function registerSection(r, section) {
         function CustomPageRenderer() {
             const route = navigation.useRoute();
             const nav = navigation.useNavigation();
-            r.React.useEffect(() => { nav.setOptions({ title: route.params.title }); }, [nav, route.params.title]);
+            r.React.useEffect(() => { nav.setOptions({ title: route.params.title, headerShown: route.params.headerShown !== false }); }, [nav, route.params.title, route.params.headerShown]);
             return route.params.render();
         }
         const get = () => {
@@ -43,7 +43,7 @@ export function registerSection(r, section) {
                             if (!runtime.active) return;
                             if (canNavigate) {
                                 const nav = navigationRef.getRootNavigationRef();
-                                nav.navigate(routeName, { title: row.title(), owner: runtime.meta.id,
+                                nav.navigate(routeName, { title: row.title(), headerShown: row.headerShown, owner: runtime.meta.id,
                                     render: () => runtime.active ? runtime.h(page.default, { close: () => nav.goBack() }) : null });
                             } else runtime.open(row.key, page.default, {}, { scrollable: false });
                         } catch (error) { if (runtime.active) runtime.error('Open settings page', error); }

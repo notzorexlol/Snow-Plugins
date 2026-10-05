@@ -542,8 +542,8 @@ var plugin = (() => {
         const route = navigation.useRoute();
         const nav = navigation.useNavigation();
         r.React.useEffect(() => {
-          nav.setOptions({ title: route.params.title });
-        }, [nav, route.params.title]);
+          nav.setOptions({ title: route.params.title, headerShown: route.params.headerShown !== false });
+        }, [nav, route.params.title, route.params.headerShown]);
         return route.params.render();
       };
       const descriptor = Object.getOwnPropertyDescriptor(constants, "SETTING_RENDERER_CONFIG");
@@ -575,6 +575,7 @@ var plugin = (() => {
                   const nav = navigationRef.getRootNavigationRef();
                   nav.navigate(routeName, {
                     title: row.title(),
+                    headerShown: row.headerShown,
                     owner: runtime.meta.id,
                     render: () => runtime.active ? runtime.h(page.default, { close: () => nav.goBack() }) : null
                   });
@@ -699,7 +700,11 @@ var plugin = (() => {
     function Icon() {
       r.useRefresh();
       const uri = iconUrl();
-      return uri ? h(RN.Image, { source: { uri }, style: { width: 24, height: 24 }, accessibilityIgnoresInvertColors: true }) : null;
+      return uri ? h(
+        RN.View,
+        { style: { width: 24, height: 24, alignItems: "center", justifyContent: "center" } },
+        h(RN.Image, { source: { uri }, resizeMode: "contain", style: { width: 18, height: 18 }, accessibilityIgnoresInvertColors: true })
+      ) : null;
     }
     const sending = /* @__PURE__ */ new Set();
     async function download(message) {
@@ -719,20 +724,18 @@ var plugin = (() => {
         sending.delete(message.id);
       }
     }
-    function NightyPage({ close }) {
+    function NightyPage() {
       r.useRefresh();
       const src = pageUrl(store.url);
       const WebView = r.find("WebView")?.WebView || r.byName("WebView");
       const [error, setError] = React.useState("");
-      const [revision, reload] = React.useState(0);
       return h(
         RN.View,
-        { style: { flex: 1, minHeight: 500 } },
-        h(Text, { heading: true }, "Nighty"),
+        { style: { flex: 1 } },
         !src ? h(Text, null, "Set a valid HTTP or HTTPS URL in Nighty Tab settings.") : !WebView ? h(Text, null, "WebView is unavailable in this Snow build.") : h(WebView, {
-          key: `${src}:${revision}`,
+          key: src,
           source: { uri: src },
-          style: { flex: 1, minHeight: 440 },
+          style: { flex: 1 },
           originWhitelist: ["http://*", "https://*"],
           javaScriptEnabled: true,
           domStorageEnabled: true,
@@ -744,12 +747,7 @@ var plugin = (() => {
           onHttpError: (event) => setError(`Nighty returned HTTP ${event.nativeEvent?.statusCode}.`),
           onLoad: () => setError("")
         }),
-        error ? h(Text, null, error) : null,
-        src ? h(Button, { text: "Reload", onPress: () => {
-          setError("");
-          reload((v) => v + 1);
-        } }) : null,
-        close ? h(Button, { text: "Close", onPress: close }) : null
+        error ? h(Text, null, error) : null
       );
     }
     function Settings({ close }) {
@@ -771,13 +769,13 @@ var plugin = (() => {
       );
     }
     return { Settings, NightyPage, download, start() {
-      r.status.settingsEntry = registerSection(r, { name: "Nighty", items: [{ key: "MIME_NIGHTY", title: () => "Nighty", IconComponent: Icon, render: async () => ({ default: NightyPage }) }] });
+      r.status.settingsEntry = registerSection(r, { name: "Nighty", items: [{ key: "MIME_NIGHTY", title: () => "Nighty", headerShown: false, IconComponent: Icon, render: async () => ({ default: NightyPage }) }] });
       r.status.messageMenu = patchLazySheet(r, (key, props) => key === "MessageLongPressActionSheet" && canDownload(store, props?.message) ? { key: "mime-nighty-download", label: "Download Script", icon: h(Icon), onPress: () => download(props.message) } : null);
     } };
   }
   NightyTab.defaults = { url: "", scriptUtils: false, nightyPrefix: ".", iconType: "blue", customIconUrl: "" };
 
   // NightyTab.entry.js
-  var NightyTab_entry_default = register({ "id": "mime.nightytab", "name": "Nighty Tab", "description": "Nighty in mobile settings, with optional Download Script replies.", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }, { "name": "rico | wkcp", "id": "1361736124858630274" }], "version": "1.0.0", "license": "GPL-3.0-or-later", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NightyTab" }, NightyTab);
+  var NightyTab_entry_default = register({ "id": "mime.nightytab", "name": "Nighty Tab", "description": "Nighty in mobile settings, with optional Download Script replies.", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }, { "name": "rico | wkcp", "id": "1361736124858630274" }], "version": "1.0.1", "license": "GPL-3.0-or-later", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NightyTab" }, NightyTab);
   return __toCommonJS(NightyTab_entry_exports);
 })();

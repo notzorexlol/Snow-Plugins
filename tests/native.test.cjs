@@ -203,7 +203,7 @@ test('Nighty lazy menus stay bound to the opened message, recheck toggles and cl
     const opened=[];const sheets={openLazy:(component,key,props)=>opened.push({component,key,props}),hideActionSheet(){}};
     let sends=[];const http={get(){},put(){},del(){},post:async req=>sends.push(req)};
     const {r}=await harness({...factory.defaults,scriptUtils:true},[sheets,http]);const plugin=factory(r);plugin.start();
-    function ActionSheetRow(){return null;}function ActionSheetRowGroup(){return null;}
+    function ActionSheetRow(){return null;}function ActionSheetRowGroup({children}){return children;}
     const module={default:()=>React.createElement('View',null,React.createElement(ActionSheetRowGroup,null,[React.createElement(ActionSheetRow,{key:'original',label:'Original'})]))};
     for(const id of ['a','b']) sheets.openLazy(Promise.resolve(module),'MessageLongPressActionSheet',{message:{id,channel_id:'ch',attachments:[{}]}});
     const a=await opened[0].component,b=await opened[1].component;
@@ -223,8 +223,69 @@ test('Nighty WebView has isolated cookies, no credential bridge, and reports inv
     const props=tree.root.findByType('WebView').props;
     assert.equal(props.sharedCookiesEnabled,false);assert.equal(props.thirdPartyCookiesEnabled,false);assert.equal(props.onMessage,undefined);
     assert.equal(props.injectedJavaScript,undefined);assert.equal(props.onShouldStartLoadWithRequest({url:'file:///local'}),false);
+    assert.equal(tree.root.findAllByType('Button').length,0);assert.equal(tree.root.findAllByType('Text').length,0);
     await Renderer.act(async()=>{r.set('url','bad');});assert.match(JSON.stringify(tree.toJSON()),/valid HTTP/);
     await Renderer.act(async()=>tree.unmount());await r.dispose();
+});
+
+test('Nighty uses a contained small icon and a headerless native route',async()=>{
+    const {default:factory}=await import('../src/plugins/nighty-tab.js');
+    const constants={SETTING_RENDERER_CONFIG:{}},lists={createList:v=>v};let route,options;
+    const nav={navigate:(name,params)=>{route={name,params};},setOptions:value=>{options=value;},getCurrentRoute:()=>route,goBack(){}};
+    const {r,common}=await harness(factory.defaults,[constants,lists,{getRootNavigationRef:()=>nav}]);
+    common.NavigationNative={useRoute:()=>route,useNavigation:()=>nav};factory(r).start();
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(React.createElement(constants.SETTING_RENDERER_CONFIG.MIME_NIGHTY.IconComponent));});
+    assert.deepEqual(tree.root.findByType('Image').props.style,{width:18,height:18});assert.equal(tree.root.findByType('Image').props.resizeMode,'contain');
+    await Renderer.act(async()=>tree.unmount());await constants.SETTING_RENDERER_CONFIG.MIME_NIGHTY.onPress();
+    await Renderer.act(async()=>{tree=Renderer.create(React.createElement(constants.SETTING_RENDERER_CONFIG.MIME_PLUGIN_SETTINGS_PAGE.screen.getComponent()));});
+    assert.equal(options.headerShown,false);await Renderer.act(async()=>tree.unmount());await r.dispose();
+});
+
+test('Pin DMs FlashList keeps auxiliary rows, host callbacks, layouts and imperative scroll targets',async()=>{
+    const {default:factory}=await import('../src/plugins/pin-dms.js');
+    const channels={a:{id:'a',type:1},b:{id:'b',type:3}};
+    const {r}=await harness(factory.defaults,[{storeName:'ChannelStore',getChannel:id=>channels[id]},{storeName:'UserStore',getCurrentUser:()=>({id:'owner'})},{storeName:'PrivateChannelSortStore',getPrivateChannelIds:()=>['a','b']}]);
+    const p=factory(r),category=p.data.save(null,'Friends',0,'b');
+    const values=[{kind:'search'},{channelId:'a'},{...channels.b},{kind:'footer'}],ref=React.createRef();let viewed,scrolled,layoutItem;
+    const original=React.createElement('FlashList',{ref,data:values,extraData:'host',initialScrollIndex:1,keyExtractor:(_,i)=>'host-'+i,
+        renderItem:({item,index})=>React.createElement('DM',{item,index}),getItemLayout:(_,i)=>({length:30+i*10,offset:0,index:i}),
+        getItemType:(item,index)=>{assert.equal(item,values[index]);return 'host';},overrideItemLayout:(_layout,item,index)=>{layoutItem={item,index};},
+        onViewableItemsChanged:payload=>{viewed=payload;}});
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(p.adaptList(original),{createNodeMock:()=>({scrollToIndex:args=>{scrolled=args;},scrollToItem:args=>{scrolled=args;}})});});
+    let list=tree.root.findByType('FlashList');assert.equal(list.props.data[0].item,values[0]);assert.equal(list.props.data.at(-1).item,values[3]);
+    const b=list.props.data.find(row=>row.id==='b');assert.equal(list.props.renderItem({item:b}).props.index,2);assert.equal(list.props.initialScrollIndex,4);
+    assert.deepEqual(list.props.getItemLayout(list.props.data,4),{index:4,length:40,offset:176});
+    assert.equal(list.props.getItemType(b,2),'host');list.props.overrideItemLayout({},b,2);assert.deepEqual(layoutItem,{item:values[2],index:2});
+    list.props.onViewableItemsChanged({viewableItems:[{item:list.props.data[1],index:1},{item:b,index:2}],changed:[{item:b,index:2}]});
+    assert.equal(viewed.viewableItems.length,1);assert.equal(viewed.viewableItems[0].item,values[2]);assert.equal(viewed.viewableItems[0].key,'host-2');
+    ref.current.scrollToIndex({index:1,animated:false});assert.deepEqual(scrolled,{index:4,animated:false});
+    await Renderer.act(async()=>p.data.collapse(category));ref.current.scrollToIndex({index:2});assert.equal(scrolled.index,1);
+    await Renderer.act(async()=>r.dispose());list=tree.root.findByType('FlashList');assert.equal(list.props.data,values);ref.current.scrollToIndex({index:1});assert.equal(scrolled.index,1);
+    await Renderer.act(async()=>tree.unmount());assert.equal(ref.current,null);
+});
+
+test('Pin DMs augments nested native channel menus and creates a category from holding a native row',async()=>{
+    const {default:factory}=await import('../src/plugins/pin-dms.js');
+    const channel={id:'dm',type:1,recipients:['friend']};
+    function ActionSheetRow(){return null;}function ActionSheetRowGroup({children}){return children;}
+    function Content(){return React.createElement('View',null,React.createElement(ActionSheetRowGroup,null,[React.createElement(ActionSheetRow,{key:'original',label:'Original'})]));}
+    const module={name:'ChannelLongPressActionSheet',default:props=>React.createElement(Content,props)},original=module.default;
+    const {r,sheets,hooks}=await harness(factory.defaults,[module,{storeName:'ChannelStore',getChannel:id=>id==='dm'?channel:null},{storeName:'UserStore',getCurrentUser:()=>({id:'owner'})},{storeName:'PrivateChannelSortStore',getPrivateChannelIds:()=>['dm']}]);
+    const p=factory(r);p.start();let tree;
+    await Renderer.act(async()=>{tree=Renderer.create(module.default({channel}));});
+    assert.deepEqual(tree.root.findAllByType(ActionSheetRow).map(row=>row.props.label),['Original','Pin DMs']);
+    await Renderer.act(async()=>tree.root.findAllByType(ActionSheetRow)[1].props.onPress());assert.equal(sheets.size,1);
+    await Renderer.act(async()=>tree.unmount());sheets.clear();
+    const wrapped=hooks.get('MessagesItemChannelContent')(null,React.createElement('DMContent',{channel}));
+    await Renderer.act(async()=>wrapped.props.onLongPress({stopPropagation(){}}));
+    await Renderer.act(async()=>{tree=Renderer.create(React.createElement([...sheets.values()][0]));});
+    await Renderer.act(async()=>tree.root.findAllByType('Button').find(button=>button.props.text==='New category').props.onPress());
+    await Renderer.act(async()=>tree.unmount());
+    await Renderer.act(async()=>{tree=Renderer.create(React.createElement([...sheets.values()][0]));});
+    await Renderer.act(async()=>tree.root.findAllByType('Input')[0].props.onChange('Friends'));
+    await Renderer.act(async()=>tree.root.findAllByType('Button').find(button=>button.props.text==='Save').props.onPress());
+    assert.equal(p.data.categories()[0].name,'Friends');assert.deepEqual(p.data.categories()[0].channels,['dm']);
+    await Renderer.act(async()=>tree.unmount());await r.dispose();assert.equal(module.default,original);
 });
 
 test('Pin DMs preserves account isolation, categories, colors, moves, transfers and unpinning',async()=>{
@@ -259,9 +320,9 @@ test('Pin DMs native list wraps only supported private-channel shapes and update
     const values=[channels.a,channels.b], renderItem=({item,index})=>React.createElement('DM',{id:item.id,index});
     const element=React.createElement('FlatList',{data:values,renderItem});const wrapped=p.adaptList(element);assert(wrapped);
     assert.equal(p.adaptList(React.createElement('FlatList',{data:[channels.g],renderItem})),undefined);
-    assert.equal(p.adaptList(React.createElement('FlatList',{data:values,renderItem,getItemLayout(){}})),undefined);
+    assert.equal(p.adaptList(React.createElement('FlatList',{data:values,renderItem,searchQuery:'a'})),undefined);
     let tree;await Renderer.act(async()=>{tree=Renderer.create(wrapped);});let flat=tree.root.findByType('FlatList');
-    assert.deepEqual(flat.props.data.filter(v=>v.id).map(v=>v.id),['b','a']);assert.equal(flat.props.renderItem({item:{id:'b'}}).props.index,1);
+    assert.deepEqual(flat.props.data.filter(v=>v.id).map(v=>v.id),['b','a']);assert.equal(flat.props.renderItem({item:flat.props.data.find(v=>v.id==='b')}).props.index,1);
     assert.equal(element.props.data,values);assert.deepEqual(values,[channels.a,channels.b]);
     await Renderer.act(async()=>{p.data.collapse(p.data.categories()[0].id);});flat=tree.root.findByType('FlatList');
     assert.deepEqual(flat.props.data.filter(v=>v.id).map(v=>v.id),['a']);

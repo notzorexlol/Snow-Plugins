@@ -24,7 +24,8 @@ export default function NightyTab(r) {
     function Icon() {
         r.useRefresh();
         const uri = iconUrl();
-        return uri ? h(RN.Image, { source: { uri }, style: { width: 24, height: 24 }, accessibilityIgnoresInvertColors: true }) : null;
+        return uri ? h(RN.View, { style: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' } },
+            h(RN.Image, { source: { uri }, resizeMode: 'contain', style: { width: 18, height: 18 }, accessibilityIgnoresInvertColors: true })) : null;
     }
     const sending = new Set();
     async function download(message) {
@@ -42,18 +43,16 @@ export default function NightyTab(r) {
             } });
         } finally { sending.delete(message.id); }
     }
-    function NightyPage({ close }) {
+    function NightyPage() {
         r.useRefresh();
         const src = pageUrl(store.url);
         const WebView = r.find('WebView')?.WebView || r.byName('WebView');
         const [error, setError] = React.useState('');
-        const [revision, reload] = React.useState(0);
-        return h(RN.View, { style: { flex: 1, minHeight: 500 } },
-            h(Text, { heading: true }, 'Nighty'),
+        return h(RN.View, { style: { flex: 1 } },
             !src ? h(Text, null, 'Set a valid HTTP or HTTPS URL in Nighty Tab settings.')
                 : !WebView ? h(Text, null, 'WebView is unavailable in this Snow build.')
                     : h(WebView, {
-                        key: `${src}:${revision}`, source: { uri: src }, style: { flex: 1, minHeight: 440 },
+                        key: src, source: { uri: src }, style: { flex: 1 },
                         originWhitelist: ['http://*', 'https://*'], javaScriptEnabled: true, domStorageEnabled: true,
                         sharedCookiesEnabled: false, thirdPartyCookiesEnabled: false, startInLoadingState: true,
                         onShouldStartLoadWithRequest: req => !!pageUrl(req.url),
@@ -61,9 +60,7 @@ export default function NightyTab(r) {
                         onHttpError: event => setError(`Nighty returned HTTP ${event.nativeEvent?.statusCode}.`),
                         onLoad: () => setError(''),
                     }),
-            error ? h(Text, null, error) : null,
-            src ? h(Button, { text: 'Reload', onPress: () => { setError(''); reload(v => v + 1); } }) : null,
-            close ? h(Button, { text: 'Close', onPress: close }) : null);
+            error ? h(Text, null, error) : null);
     }
     function Settings({ close }) {
         r.useRefresh();
@@ -79,7 +76,7 @@ export default function NightyTab(r) {
             h(Icon), h(Text, { muted: true }, `Settings entry: ${r.status.settingsEntry ? 'registered' : 'unavailable'} · Message menu: ${r.status.messageMenu ? 'registered' : 'unavailable'}`));
     }
     return { Settings, NightyPage, download, start() {
-        r.status.settingsEntry = registerSection(r, { name: 'Nighty', items: [{ key: 'MIME_NIGHTY', title: () => 'Nighty', IconComponent: Icon, render: async () => ({ default: NightyPage }) }] });
+        r.status.settingsEntry = registerSection(r, { name: 'Nighty', items: [{ key: 'MIME_NIGHTY', title: () => 'Nighty', headerShown: false, IconComponent: Icon, render: async () => ({ default: NightyPage }) }] });
         r.status.messageMenu = patchLazySheet(r, (key, props) => key === 'MessageLongPressActionSheet' && canDownload(store, props?.message)
             ? { key: 'mime-nighty-download', label: 'Download Script', icon: h(Icon), onPress: () => download(props.message) } : null);
     } };
