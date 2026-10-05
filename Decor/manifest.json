@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.decor",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "display": {
     "name": "Decor",
     "description": "Browse and equip Decor avatar decorations.",

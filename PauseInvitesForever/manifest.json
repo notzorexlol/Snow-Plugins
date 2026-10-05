@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.pauseinvitesforever",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "display": {
     "name": "PauseInvitesForever",
     "description": "Pause and resume server invites with explicit confirmation.",

@@ -5,7 +5,7 @@
     "id": "mime.debugconsole",
     "name": "DebugConsole",
     "description": "Readable live logs with clear, copy, search and severity filters.",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -21,7 +21,7 @@
     "id": "mime.decor",
     "name": "Decor",
     "description": "Browse and equip Decor avatar decorations.",
-    "version": "2.2.4",
+    "version": "2.2.5",
     "authors": [
       {
         "name": "Fiery",
@@ -41,7 +41,7 @@
     "id": "mime.gifroulette",
     "name": "GifRoulette",
     "description": "Send one random favorite GIF with /gifroulette.",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -57,7 +57,7 @@
     "id": "mime.highlightcode",
     "name": "HighlightCode",
     "description": "Highlight supported native chat code blocks.",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "authors": [
       {
         "name": "mafu",
@@ -76,8 +76,8 @@
     "module": "more-commands",
     "id": "mime.morecommands",
     "name": "MoreCommands",
-    "description": "Fun and utility slash commands, including /gifroulette.",
-    "version": "2.2.0",
+    "description": "Fun and utility slash commands, including /more-gifroulette.",
+    "version": "2.2.1",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -93,7 +93,7 @@
     "id": "mime.nitrosniper",
     "name": "NitroSniper",
     "description": "Process new gift links with a deduplicated queue and visible results.",
-    "version": "2.2.1",
+    "version": "2.2.2",
     "authors": [
       {
         "name": "neoarz",
@@ -113,7 +113,7 @@
     "id": "mime.previewfile",
     "name": "PreviewFile",
     "description": "Unavailable until Snow is open source.",
-    "version": "2.2.8",
+    "version": "2.2.9",
     "authors": [
       {
         "name": "mafu",
@@ -133,7 +133,7 @@
     "id": "mime.testplugin",
     "name": "TestPlugin",
     "description": "Native Snow compatibility checks, sibling files, popups and isolated WebView CSS.",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -150,7 +150,7 @@
     "id": "mime.blurnsfw",
     "name": "BlurNSFW",
     "description": "Tap-to-reveal sensitive media on supported mobile components.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "authors": [
       {
         "name": "Vendicated",
@@ -171,7 +171,7 @@
     "id": "mime.nsfwgatebypass",
     "name": "NSFWGateBypass",
     "description": "Bypass supported local guild interstitials without mutating account settings.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "authors": [
       {
         "name": "eternal",
@@ -191,7 +191,7 @@
     "id": "mime.volumebooster",
     "name": "VolumeBooster",
     "description": "Optional voice output boost without patching Discord sliders.",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "authors": [
       {
         "name": "Nuckyz",
@@ -216,7 +216,7 @@
     "id": "mime.validuser",
     "name": "ValidUser",
     "description": "Automatically resolve unknown mentions and replace @Unknown User.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "authors": [
       {
         "name": "Vendicated",
@@ -240,7 +240,7 @@
     "id": "mime.openinapp",
     "name": "OpenInApp",
     "description": "Open Steam, Telegram, Instagram, TikTok and other service links in their apps.",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "authors": [
       {
         "name": "Vendicated",
@@ -264,7 +264,7 @@
     "id": "mime.pauseinvitesforever",
     "name": "PauseInvitesForever",
     "description": "Pause and resume server invites with explicit confirmation.",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "authors": [
       {
         "name": "Dolfies",
@@ -287,8 +287,8 @@
     "module": "install-links",
     "id": "mime.installlinks",
     "name": "InstallLinks",
-    "description": "Send and open snow:// install-plugin links.",
-    "version": "1.0.6",
+    "description": "Share snow:// links and copy manifest URLs for manual installation.",
+    "version": "1.0.7",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -304,7 +304,7 @@
     "id": "mime.tokenutils",
     "name": "TokenUtils",
     "description": "/get-token and /token-info for the current Authorization token.",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "authors": [
       {
         "name": "Mime | N0_.q3",
@@ -320,7 +320,7 @@
     "id": "mime.globalbadges",
     "name": "GlobalBadges",
     "description": "Profile badges from EquiBadges (all client mods) and ObaWorkshop BadgeVault.",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "authors": [
       {
         "name": "domi.btnr",
@@ -337,5 +337,48 @@
     ],
     "license": "MIT",
     "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/GlobalBadges"
+  },
+  {
+    "folder": "NightyTab",
+    "module": "nighty-tab",
+    "id": "mime.nightytab",
+    "name": "Nighty Tab",
+    "description": "Nighty in mobile settings, with optional Download Script replies.",
+    "authors": [
+      {
+        "name": "Mime | N0_.q3",
+        "id": "957164619061932045"
+      },
+      {
+        "name": "rico | wkcp",
+        "id": "1361736124858630274"
+      }
+    ],
+    "version": "1.0.0",
+    "license": "GPL-3.0-or-later",
+    "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NightyTab"
+  },
+  {
+    "folder": "PinDms",
+    "module": "pin-dms",
+    "id": "mime.pindms",
+    "name": "Pin DMs",
+    "description": "Per-account DM categories, colors, ordering and collapsible sections for mobile.",
+    "authors": [
+      {
+        "name": "Vendicated",
+        "id": "343383572805058560"
+      },
+      {
+        "name": "Aria"
+      },
+      {
+        "name": "Mime | N0_.q3",
+        "id": "957164619061932045"
+      }
+    ],
+    "version": "1.0.0",
+    "license": "GPL-3.0-or-later",
+    "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/PinDms"
   }
 ]

@@ -78,7 +78,7 @@ export default function NitroSniper(r) {
         return h(Page, { title: 'NitroSniper' }, h(Toggle, { setting: 'ignoreOwnGiftLinks', label: 'Ignore my gift links' }),
             h(Text, null, `Queued ${stats.queued} · Claimed ${stats.claimed} · Failed ${stats.failed}`), h(Text, null, stats.lastResult),
             h(Input, { label: 'Optional result webhook', value: url, onChange: setUrl, secureTextEntry: true, autoCapitalize: 'none' }),
-            h(Button, { text: 'Save webhook', onPress: () => { try { webhookUrl(url); r.set('webhookUrl', url.trim()); r.toast('Saved'); } catch (e) { r.error('Webhook', e); } } }),
+            h(Button, { text: 'Save webhook', onPress: async () => { try { webhookUrl(url); r.set('webhookUrl', url.trim()); await r.api.storage.flush(); r.toast('Saved'); } catch (e) { r.error('Webhook', e); } } }),
             h(Button, { text: 'Send test webhook', variant: 'secondary', onPress: () => webhook({ content: 'NitroSniper Snow webhook test' }).then(() => r.toast(r.store.webhookUrl ? 'Test sent' : 'Set a webhook first')).catch(e => r.error('Webhook test', e)) }),
             h(Text, { muted: true }, 'Only new live messages are processed. Timeouts are shown and never retried automatically. Desktop callbacks are replaced by one mobile REST request.'));
     }

@@ -2,10 +2,10 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.morecommands",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "display": {
     "name": "MoreCommands",
-    "description": "Fun and utility slash commands, including /gifroulette.",
+    "description": "Fun and utility slash commands, including /more-gifroulette.",
     "authors": [
       {
         "name": "Mime | N0_.q3",

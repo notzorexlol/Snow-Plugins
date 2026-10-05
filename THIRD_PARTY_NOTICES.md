@@ -39,3 +39,9 @@ The repository’s root MIT license covers original Mime code. Per-plugin LICENS
 ## Bundled image libraries
 
 Decor bundles **jpeg-js 0.4.4** (BSD-3-Clause, Eugene Ware and contributors) and **pako 1.0.11** (MIT and Zlib, nodeca/zlib contributors). Full licenses are in [licenses/jpeg-js.txt](licenses/jpeg-js.txt) and [licenses/pako.txt](licenses/pako.txt). The PNG chunk writer is original Mime code. **upng-js 2.1.0** is a development-only decoder/APNG test-fixture dependency, not the production encoder. React and React Native are obtained from Snow at runtime; development React packages are only used for tests.
+
+## New mobile ports
+
+- NightyTab: Mime, rico, Vendicated and contributors; GPL-3.0-or-later. Source: https://github.com/aboveproof/Equicord-Nighty-Tab. See NightyTab/LICENSE.
+- PinDms: Vendicated, Aria and contributors; GPL-3.0-or-later. Source: https://github.com/Equicord/Equicord/tree/main/src/plugins/pinDms. See PinDms/LICENSE.
+- src/settings-section.js and src/action-sheet.js adapt Rain core settings and viewraw integration, copyright Rain contributors, MPL-2.0. Source: https://codeberg.org/raincord/rain. MPL notice and source form retained; license in licenses/MPL-2.0.txt.

@@ -124,7 +124,7 @@ export default function MoreCommands(r) {
                 if (!Number.isSafeInteger(n) || n < 1 || n > 10) n = 3;
                 for (let i = n; i >= 0; i--) {
                     r.local(r.channelId(ctx), i === 0 ? '🎉 Go! 🎉' : i + '...');
-                    if (i) await new Promise(resolve => setTimeout(resolve, 1000));
+                    if (i) await r.wait(1000);
                 }
             });
             cmd('nekos', 'Send a neko image', [], async () => {
@@ -151,7 +151,7 @@ export default function MoreCommands(r) {
                 return { content: /^[.\-/ ]+$/.test(input) ? fromMorse(input) : toMorse(input) };
             });
             cmd('uwuify', 'uwuify text', [opt('message', 'Text', { required: true })], args => ({ content: uwuify(arg(args, 'message', '')) }));
-            cmd('gifroulette', 'Send a random favorite GIF', [], (_a, ctx) => sendFavoriteGif(r, ctx));
+            cmd('more-gifroulette', 'Send a random favorite GIF', [], (_a, ctx) => sendFavoriteGif(r, ctx));
             for (const [name, face] of faces) {
                 cmd(name, face, [opt('message', 'Prefix')], args => ({ content: (arg(args, 'message', '') + ' ' + face).trim() }));
             }
@@ -160,7 +160,7 @@ export default function MoreCommands(r) {
             r.useRefresh();
             return r.h(Page, { title: 'MoreCommands' },
                 r.h(Toggle, { setting: 'addFreakyEnding', label: 'Add a random ending to /freaky' }),
-                r.h(Text, { muted: true }, 'Commands send through Discord REST when Snow does not auto-send command results. /gifroulette uses your starred GIFs.'));
+                r.h(Text, { muted: true }, 'Snow sends returned command results once. /more-gifroulette uses your starred GIFs and can coexist with GifRoulette.'));
         },
     };
 }

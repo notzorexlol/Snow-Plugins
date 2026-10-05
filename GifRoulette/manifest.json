@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.gifroulette",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "display": {
     "name": "GifRoulette",
     "description": "Send one random favorite GIF with /gifroulette.",

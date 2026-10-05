@@ -1,0 +1,26 @@
+{
+  "spec": 3,
+  "type": "plugin",
+  "id": "mime.nightytab",
+  "version": "1.0.0",
+  "display": {
+    "name": "Nighty Tab",
+    "description": "Nighty in mobile settings, with optional Download Script replies.",
+    "authors": [
+      {
+        "name": "Mime | N0_.q3",
+        "id": "957164619061932045"
+      },
+      {
+        "name": "rico | wkcp",
+        "id": "1361736124858630274"
+      }
+    ]
+  },
+  "main": "index.js",
+  "extras": {
+    "license": "GPL-3.0-or-later",
+    "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NightyTab",
+    "bunny": {}
+  }
+}

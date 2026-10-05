@@ -6427,8 +6427,10 @@ var plugin = (() => {
     const openSheets = /* @__PURE__ */ new Map();
     const control = new AbortController();
     let active = true;
-    const store = B.plugin?.createStorage ? B.plugin.createStorage(defaults) : { ...defaults };
-    for (const [key, value] of Object.entries(defaults)) if (store[key] === void 0) store[key] = value;
+    const initial = JSON.parse(JSON.stringify(defaults));
+    const store = B.plugin?.createStorage ? B.plugin.createStorage(initial) : initial;
+    for (const [key, value] of Object.entries(initial)) if (store[key] === void 0) store[key] = value;
+    const alerts = /* @__PURE__ */ new Set();
     const r = {
       B,
       meta,
@@ -6457,7 +6459,18 @@ var plugin = (() => {
           },
           flush: () => B.plugin?.flushStorage?.() || Promise.resolve()
         },
-        ui: B.ui
+        ui: {
+          ...B.ui,
+          openAlert(id, element) {
+            if (!r.active) return;
+            alerts.add(id);
+            return B.ui.openAlert(id, element);
+          },
+          dismissAlert(id) {
+            alerts.delete(id);
+            return B.ui.dismissAlert(id);
+          }
+        }
       },
       own(fn) {
         if (typeof fn === "function") cleanups.push(fn);
@@ -6467,8 +6480,10 @@ var plugin = (() => {
         for (const fn of listeners) fn();
       },
       useRefresh() {
+        B.plugin?.useProxy?.(store);
         const [, bump] = React.useState(0);
         React.useEffect(() => {
+          if (!r.active) return;
           const fn = () => bump((n) => n + 1);
           listeners.add(fn);
           return () => listeners.delete(fn);
@@ -6476,6 +6491,7 @@ var plugin = (() => {
         return () => r.changed();
       },
       set(key, value) {
+        if (!r.active) return;
         store[key] = value;
         r.changed();
         Promise.resolve(B.plugin?.flushStorage?.()).catch((e) => r.error("Save settings", e));
@@ -6549,39 +6565,8 @@ var plugin = (() => {
         const selected = r.byStore("SelectedChannelStore");
         return selected?.getChannelId?.() || selected?.getCurrentlySelectedChannelId?.() || selected?.getLastSelectedChannelId?.() || null;
       },
-      async send(channelId, content) {
-        if (!channelId || content == null || content === "") return false;
-        const text = String(content);
-        try {
-          await r.discord(`/channels/${channelId}/messages`, { method: "POST", body: JSON.stringify({ content: text }) });
-          return true;
-        } catch (error) {
-          r.status.lastSendError = error?.message || String(error);
-        }
-        const util = r.find("sendMessage", "receiveMessage") || r.find("sendMessage", "sendBotMessage") || r.find("sendMessage");
-        const snowflake = r.find("fromTimestamp");
-        const nonce = typeof snowflake?.fromTimestamp === "function" ? String(snowflake.fromTimestamp(Date.now())) : String(Date.now());
-        const body = { content: text, tts: false, nonce, invalidEmojis: [], validNonShortcutEmojis: [] };
-        if (typeof util?.sendMessage === "function") {
-          try {
-            util.sendMessage(channelId, body);
-            return true;
-          } catch {
-          }
-          try {
-            util.sendMessage(channelId, body, true);
-            return true;
-          } catch {
-          }
-          try {
-            util.sendMessage(channelId, text);
-            return true;
-          } catch {
-          }
-        }
-        return false;
-      },
       local(channelId, content) {
+        if (!r.active) return false;
         const util = r.find("sendBotMessage");
         if (typeof util?.sendBotMessage === "function") {
           try {
@@ -6596,50 +6581,41 @@ var plugin = (() => {
       command(command) {
         const register2 = r.api.commands?.registerCommand;
         if (typeof register2 !== "function") throw new Error(`${meta.name}: commands.registerCommand unavailable`);
-        if (!r._commands) r._commands = [];
-        if (r._nextCommandId == null) r._nextCommandId = -91e4 - Math.abs(hashId(meta.id)) % 9e3;
         const name = command.name;
         const execute = command.execute;
         const prepared = {
           ...command,
           name,
-          displayName: command.displayName || name,
-          displayDescription: command.displayDescription || command.description,
-          untranslatedName: command.untranslatedName || name,
-          untranslatedDescription: command.untranslatedDescription || command.description,
-          applicationId: "-1",
-          type: command.type ?? 1,
-          inputType: 0,
-          options: (command.options || []).map((opt) => ({
-            ...opt,
-            displayName: opt.displayName || opt.name,
-            displayDescription: opt.displayDescription || opt.description || opt.name
-          })),
+          options: (command.options || []).map((opt) => ({ ...opt })),
           async execute(args, ctx) {
             if (!r.active) return;
             try {
               const result = await execute(args, ctx);
               if (!r.active) return;
-              if (result && typeof result === "object" && typeof result.content === "string") {
-                const cid = r.channelId(ctx) || r.channelId(args);
-                if (cid && await r.send(cid, result.content)) return;
-              }
               return result;
             } catch (error) {
               if (r.active) r.error(`/${name}`, error);
             }
           }
         };
-        const remove = register2(prepared);
-        prepared.id = String(r._nextCommandId--);
-        r._commands.push(prepared);
-        patchCommandList(r);
-        return r.own(() => {
-          try {
-            remove?.();
-          } catch {
-          }
-          r._commands = r._commands.filter((item) => item !== prepared);
+        return r.own(register2(prepared));
+      },
+      wait(ms) {
+        if (!r.active) return Promise.reject(new Error("Plugin stopped"));
+        return new Promise((resolve, reject) => {
+          const finish = () => {
+            clearTimeout(timer);
+            control.signal.removeEventListener("abort", abort);
+          };
+          const abort = () => {
+            finish();
+            reject(new Error("Plugin stopped"));
+          };
+          const timer = setTimeout(() => {
+            finish();
+            resolve();
+          }, ms);
+          control.signal.addEventListener("abort", abort, { once: true });
         });
       },
       async request(url, options = {}, timeout = 15e3, maxBytes = Infinity) {
@@ -6688,9 +6664,24 @@ var plugin = (() => {
       },
       async discord(path, options = {}) {
         if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid Discord API path");
-        const token = r.find("getToken")?.getToken();
-        if (!token) throw new Error("Discord session unavailable");
-        return r.request("https://discord.com/api/v9" + path, { ...options, headers: { "Content-Type": "application/json", ...options.headers, Authorization: token } });
+        if (!r.active) throw new Error("Plugin stopped");
+        const found = r.find("HTTP", "get", "post", "put", "patch", "del") || r.find("get", "post", "put", "del");
+        const client = found?.HTTP || found;
+        const method = (options.method || "GET").toLowerCase().replace(/^delete$/, "del");
+        if (typeof client?.[method] !== "function") throw new Error("Discord HTTP client unavailable");
+        try {
+          const response = await client[method]({ url: path, ...options.body != null ? { body: typeof options.body === "string" ? JSON.parse(options.body) : options.body } : {} });
+          if (!r.active) throw new Error("Plugin stopped");
+          if (response?.status >= 400) throw Object.assign(new Error(response.body?.message || `HTTP ${response.status}`), { status: response.status, body: response.body });
+          return { response, json() {
+            return response?.body ?? null;
+          } };
+        } catch (cause) {
+          const error = new Error(cause?.body?.message || cause?.message || "Discord request failed");
+          error.status = cause?.status;
+          error.retryAfter = Number(cause?.body?.retry_after) || 0;
+          throw error;
+        }
       },
       hook(names, transform) {
         const set = new Set(names);
@@ -6758,7 +6749,8 @@ var plugin = (() => {
         }
         openSheets.clear();
       },
-      open(key, Component, props = {}) {
+      open(key, Component, props = {}, options = {}) {
+        if (!r.active) throw new Error("Plugin stopped");
         const sheets = B.ui?.sheets;
         const ActionSheet = D.ActionSheet || C.ActionSheet;
         if (!sheets?.showSheet || !sheets?.hideSheet || !ActionSheet) throw new Error("Snow bottom-sheet components unavailable");
@@ -6790,7 +6782,7 @@ var plugin = (() => {
             if (openSheets.get(id) === close) openSheets.delete(id);
             closed = true;
           }, []);
-          return r.h(ActionSheet, { scrollable: true }, r.h(Boundary, null, r.h(Component, { ...props, close })));
+          return r.h(ActionSheet, { scrollable: options.scrollable ?? true }, r.h(Boundary, null, r.h(Component, { ...props, close })));
         }
         openSheets.set(id, close);
         try {
@@ -6802,6 +6794,7 @@ var plugin = (() => {
         return close;
       },
       copy(text) {
+        if (!r.active) return;
         const clip = r.common.clipboard || r.find("setString");
         if (!clip?.setString) throw new Error("Clipboard unavailable");
         clip.setString(String(text));
@@ -6810,6 +6803,14 @@ var plugin = (() => {
       dispose() {
         active = false;
         control.abort();
+        for (const id of alerts) {
+          try {
+            B.ui?.dismissAlert?.(id);
+          } catch (e) {
+            console.error(`[${meta.name}] alert cleanup`, e?.message);
+          }
+        }
+        alerts.clear();
         for (const abort of requests) abort();
         requests.clear();
         for (const close of [...openSheets.values()]) {
@@ -6826,44 +6827,12 @@ var plugin = (() => {
             console.error(`[${meta.name}] cleanup`, e?.message);
           }
         }
+        r.changed();
         listeners.clear();
         return r.api.storage.flush();
       }
     };
     return r;
-  }
-  function hashId(value) {
-    let hash = 0;
-    for (const char of String(value || "")) hash = hash * 31 + char.charCodeAt(0) | 0;
-    return hash;
-  }
-  function patchCommandList(r) {
-    if (r._commandListPatched) return;
-    const module = r.find("getBuiltInCommands");
-    if (typeof module?.getBuiltInCommands !== "function") return;
-    r._commandListPatched = true;
-    r.patch("after", module, "getBuiltInCommands", (_args, result) => {
-      const list = Array.isArray(result) ? result : [];
-      const byName = Object.fromEntries((r._commands || []).map((command) => [command.name, command]));
-      if (!Object.keys(byName).length) return;
-      const seen = {};
-      const out = [];
-      for (const command of list) {
-        const name = command?.name || command?.untranslatedName;
-        if (name && byName[name]) {
-          if (seen[name]) continue;
-          seen[name] = true;
-          out.push(byName[name]);
-        } else out.push(command);
-      }
-      for (const command of r._commands || []) {
-        if (!seen[command.name]) {
-          out.push(command);
-          seen[command.name] = true;
-        }
-      }
-      return out;
-    });
   }
   function ui(r) {
     const { h, C, D, RN, store } = r;
@@ -6873,7 +6842,7 @@ var plugin = (() => {
       return h(RN.Text, props, children);
     }
     function Button({ text, onPress, disabled, variant = "primary", ...props }) {
-      const Comp = D.Button || C.Button;
+      const Comp = D.Button;
       if (Comp) return h(Comp, { text, onPress, disabled, variant, size: "md", ...props });
       return h(RN.Pressable || RN.TouchableOpacity, { onPress, disabled, accessibilityRole: "button", style: { padding: 12 } }, h(Text, null, text));
     }
@@ -7040,6 +7009,17 @@ var plugin = (() => {
   function Decor(r) {
     let nativeClose;
     const uploadAborters = /* @__PURE__ */ new Set();
+    const uiTimers = /* @__PURE__ */ new Set();
+    let stopped = false;
+    function schedule(callback, delay) {
+      if (stopped || !r.active) return;
+      const timer = setTimeout(() => {
+        uiTimers.delete(timer);
+        if (!stopped && r.active) callback();
+      }, delay);
+      uiTimers.add(timer);
+      return timer;
+    }
     var unpatches = [];
     var _storage;
     var usersDecorations = {};
@@ -7204,14 +7184,6 @@ var plugin = (() => {
     }
     function getRN() {
       return r.RN;
-    }
-    function getDiscordToken() {
-      var auth = findByProps("getToken");
-      try {
-        if (auth && typeof auth.getToken === "function") return auth.getToken();
-      } catch (_e) {
-      }
-      return null;
     }
     function getStorage() {
       return r.store;
@@ -7755,26 +7727,19 @@ var plugin = (() => {
       return true;
     }
     function authorizeSilent() {
-      var discordToken = getDiscordToken();
-      if (!discordToken) return Promise.reject(new Error("no Discord token"));
       var qs = "client_id=" + encodeURIComponent(CLIENT_ID) + "&response_type=code&redirect_uri=" + encodeURIComponent(AUTHORIZE_URL) + "&scope=identify";
       function post(body) {
-        return doFetch("https://discord.com/api/v9/oauth2/authorize?" + qs, {
+        return r.discord("/oauth2/authorize?" + qs, {
           method: "POST",
-          headers: {
-            Authorization: discordToken,
-            "Content-Type": "application/json"
-          },
           body: JSON.stringify(body)
         });
       }
-      return post({ authorize: true, permissions: "0", integration_type: 0 }).then(function(r2) {
-        if (r2 && (r2.status === 400 || r2.status === 422)) {
+      return post({ authorize: true, permissions: "0", integration_type: 0 }).catch(function(error) {
+        if (error.status === 400 || error.status === 422) {
           return post({ authorize: true, permissions: "0" });
         }
-        return r2;
+        throw error;
       }).then(function(r2) {
-        if (!r2 || !r2.ok) throw new Error("http " + (r2 && r2.status));
         return r2.json();
       }).then(function(data) {
         var loc = data && (data.location || data.redirect_to || data.redirect_uri);
@@ -8745,7 +8710,7 @@ var plugin = (() => {
             decoration: decos[j],
             onChanged: function() {
               notifySelection();
-              setTimeout(closeDecorScreen, 50);
+              schedule(closeDecorScreen, 50);
             }
           }));
         }
@@ -8804,7 +8769,7 @@ var plugin = (() => {
           decoration: mine[i],
           onChanged: function() {
             notifySelection();
-            setTimeout(closeDecorScreen, 50);
+            schedule(closeDecorScreen, 50);
           }
         }));
       }
@@ -8850,11 +8815,12 @@ var plugin = (() => {
     function pickImage(cb) {
       var opts = { mediaType: "photo", selectionLimit: 1, includeBase64: true, presentationStyle: "overFullScreen", includeExtra: true };
       function done(ret) {
+        if (stopped || !r.active) return;
         var n = normalizePickedImage(ret);
         if (n) {
           createDraft.asset = n;
           cb(n);
-          setTimeout(function() {
+          schedule(function() {
             try {
               openDecorTab("Create", CreateDecorationPage);
             } catch (_e) {
@@ -8923,22 +8889,25 @@ var plugin = (() => {
     function withTimeout(promise, ms, msg) {
       return new Promise(function(resolve, reject) {
         var settled = false;
+        function finish(error, value) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          uploadAborters.delete(abort);
+          r.context.signal.removeEventListener("abort", abort);
+          if (error) reject(error);
+          else resolve(value);
+        }
+        function abort() {
+          finish(new Error("Plugin stopped"));
+        }
         var timer = setTimeout(function() {
-          if (settled) return;
-          settled = true;
-          reject(new Error(msg || "timed out"));
+          finish(new Error(msg || "timed out"));
         }, ms);
-        Promise.resolve(promise).then(function(v) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(v);
-        }, function(err) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          reject(err);
-        });
+        uploadAborters.add(abort);
+        r.context.signal.addEventListener("abort", abort, { once: true });
+        if (stopped || !r.active) abort();
+        Promise.resolve(promise).then((v) => finish(null, v), (error) => finish(error));
       });
     }
     function readFileBase64(uri) {
@@ -9181,6 +9150,7 @@ var plugin = (() => {
     }
     function start() {
       stop();
+      stopped = false;
       patchStores();
       subscribeFlux();
       patchEditProfile();
@@ -9192,6 +9162,9 @@ var plugin = (() => {
       log("started");
     }
     function stop() {
+      stopped = true;
+      for (const timer of uiTimers) clearTimeout(timer);
+      uiTimers.clear();
       for (const abort of uploadAborters) abort();
       uploadAborters.clear();
       hideSheet();
@@ -9211,6 +9184,7 @@ var plugin = (() => {
       unpatches = [];
     }
     function SettingsComponent() {
+      r.useRefresh();
       var React = getReact();
       if (!React) return null;
       var RN = getRN() || {};
@@ -9218,7 +9192,7 @@ var plugin = (() => {
       var Text = RN.Text;
       var ScrollView = RN.ScrollView;
       var comps = getMod().metro && getMod().metro.common && getMod().metro.common.components || {};
-      var Button = comps.Button || comps.LegacyButton;
+      var Button = comps.Button;
       var TextInput = comps.TextInput;
       var [, bump] = React.useState(0);
       React.useEffect(function() {
@@ -9251,8 +9225,10 @@ var plugin = (() => {
         children.push(h(View, { key: "authwrap", style: { paddingHorizontal: 12, marginTop: 8, marginBottom: 8 } }, h(Button, {
           text: authorized ? "Re-authorize" : "Authorize with Decor",
           onPress: function() {
-            authorize().then(refresh);
-            setTimeout(refresh, 2e3);
+            authorize().then(() => {
+              if (!stopped && r.active) refresh();
+            });
+            schedule(refresh, 2e3);
           }
         })));
         if (authorized) {
@@ -9281,10 +9257,6 @@ var plugin = (() => {
           onChange: function(v) {
             setToken(v);
             refresh();
-          },
-          onChangeText: function(v) {
-            setToken(v);
-            refresh();
           }
         }));
       }
@@ -9298,6 +9270,6 @@ var plugin = (() => {
   Decor.defaults = { tokens: {} };
 
   // Decor.entry.js
-  var Decor_entry_default = register({ "id": "mime.decor", "name": "Decor", "description": "Browse and equip Decor avatar decorations.", "version": "2.2.4", "authors": [{ "name": "Fiery", "id": "890228870559698955" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "GPL-3.0-or-later", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/Decor" }, Decor);
+  var Decor_entry_default = register({ "id": "mime.decor", "name": "Decor", "description": "Browse and equip Decor avatar decorations.", "version": "2.2.5", "authors": [{ "name": "Fiery", "id": "890228870559698955" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "GPL-3.0-or-later", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/Decor" }, Decor);
   return __toCommonJS(Decor_entry_exports);
 })();

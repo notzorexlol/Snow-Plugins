@@ -1,11 +1,11 @@
 import sdkIcons from './sdk-icons.json' with { type: 'json' };
-import { packs, iconNames, createEngine, colorValue, imageUrl, validateDimensions, previewUrl, originalSource } from './core.js';
+import { packs, iconNames, createEngine, colorValue, imageUrl, validateDimensions, previewUrl } from './core.js';
 
 export default function factory(r) {
     const { React, RN, h, store } = r;
     const B = r.B, D = B.metro.common.components;
     const pending = new Set();
-    function useSettings() { B.plugin.useProxy(store); r.useRefresh(); }
+    function useSettings() { r.useRefresh(); }
     async function saveSetting(key, value) { store[key] = value; r.changed(); await B.plugin.flushStorage(); }
     let enabled = true;
     const engine = createEngine(store, id => B.assets.findAsset(id));
@@ -23,50 +23,15 @@ export default function factory(r) {
 
     let hits = 0, applied = 0;
     const matched = new Map(), overridden = new Map();
-    const genericHits = new Map();
-    const seenTypes = new Map(), seenPropsNames = new Map();
-    const samples = new Map();
-    const assetSightings = new Map();
-    let createSeen = 0;
-    function introspectSource(source) {
-        if (source == null) return 'none';
-        if (typeof source !== 'object') return String(source).slice(0, 24);
-        const peek = {};
-        for (const key of ['allowIconTheming', 'moduleId', 'file', 'name', 'uri', 'id', 'width', 'height']) {
-            if (key in source) peek[key] = typeof source[key] === 'object' ? '[obj]' : String(source[key]).slice(0, 40);
-        }
-        return `${JSON.stringify(peek)}${typeof source === 'object' && !Array.isArray(source) ? '' : ` (${Array.isArray(source) ? 'array' : 'other'})`}`;
-    }
-    function probeAssetProps(props) {
-        if (!props || typeof props !== 'object') return;
-        for (const key of ['source', 'asset', 'iconAsset', 'image']) {
-            if (!(key in props)) continue;
-            const value = props[key];
-            const desc = introspectSource(Array.isArray(value) ? value[0] : value);
-            const prev = assetSightings.get(key);
-            const count = (prev?.count || 0) + 1;
-            if (!prev) assetSightings.set(key, { count, sample: desc });
-            else { prev.count = count; if (prev.sample.length < 200 && assetSightings.size < 24) prev.sample += ` | ${desc}`; }
-        }
-    }
-    function probeElement(type, props) {
-        if (!props || typeof props !== 'object' || !('name' in props)) return;
-        const typeName = typeof type === 'string' ? type : (type?.displayName || type?.name || type?.type?.name || '?');
-        seenTypes.set(typeName, (seenTypes.get(typeName) || 0) + 1);
-        if (typeof props.name === 'string') seenPropsNames.set(props.name, (seenPropsNames.get(props.name) || 0) + 1);
-    }
-    function IconReplacement({ element, name, override, via }) {
+    function IconReplacement({ element, name }) {
         useSettings();
         if (!enabled || !r.active) return element;
         matched.set(name, (matched.get(name) || 0) + 1);
-        const emitted = via || 'jsx';
-        genericHits.set(`via:${emitted}`, (genericHits.get(`via:${emitted}`) || 0) + 1);
-        const resolved = override || resolveName(name);
+        const resolved = resolveName(name);
         if (resolved?.uri) { applied++; overridden.set(name, (overridden.get(name) || 0) + 1); }
         if (!resolved) return element;
         const props = element.props || {};
         if (!resolved.uri) return React.cloneElement(element, { color: resolved.color, style: [props.style, { tintColor: resolved.color }] });
-        if (samples.size < 6) samples.set(name, { via: emitted, type: element.type?.name || element.type?.displayName || '?', keys: Object.keys(props).slice(0, 10).join(','), style: JSON.stringify(props.style), size: props.size, uri: resolved.uri.slice(0, 110) });
         // The original native style remains intact, including explicit width/height.
         // Numeric layout dimensions are preserved. Named size tokens are not image dimensions.
         const size = typeof props.size === 'number' ? props.size : 24;
@@ -92,18 +57,6 @@ export default function factory(r) {
             resolutions.set(name, r ? (r.uri ? r.uri.split('/').slice(-2).join('/') : 'color-only') : 'null');
         }
         return engine.resolveName(name);
-    }
-    function assetNameFrom(props) {
-        for (const key of ['source', 'asset', 'iconAsset', 'image']) {
-            const source = props?.[key];
-            if (!source) continue;
-            const original = originalSource(source);
-            if (!original || typeof original !== 'object' || !original.allowIconTheming) continue;
-            const file = typeof original.file === 'string' ? original.file.split('/').pop() : '';
-            const name = file.replace(/\.[^.]+$/, '') || '';
-            if (name) return { name, source };
-        }
-        return null;
     }
     function showWarning() {
         const key = 'custom-icons-warning';
@@ -206,10 +159,6 @@ export default function factory(r) {
             h(Text, { accessibilityRole: 'header', style: [styles.text, { fontSize: 24, fontWeight: '700' }] }, 'icon themer'),
             h(Text, { muted: true }, 'Named icon overrides use Snow’s JSX hook API. Reopen a screen if it kept an older icon. Legacy bitmap images and render paths outside these hooks are unchanged. Missing or failed pack images use the original icon.'),
             h(Text, { muted: true }, rendererCount ? `${rendererCount} documented icon hooks · ${hits} matches observed · ${applied} overrides applied · ${engine.failed.size} failed image(s)` : 'Icon hooks are unavailable. Overrides are not active.'),
-            h(Text, { muted: true }, `pack now: ${store.pack || 'original'} · matched names: ${[...matched.entries()].map(([n, c]) => `${n}×${c}`).join(', ') || 'none'} · generic hooks: ${[...genericHits.entries()].map(([n, c]) => `${n}×${c}`).join(', ') || 'none'} · names with pack output: ${overridden.size}`),
-            h(Text, { muted: true }, `elements with a name prop (top): ${[...seenTypes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}×${c}`).join(', ') || 'none'} · name prop values: ${[...seenPropsNames.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}×${c}`).join(', ') || 'none'}`),
-            h(Text, { muted: true }, `elements seen: ${createSeen} · asset props (key×count / sample): ${[...assetSightings.entries()].map(([k, v]) => `${k}×${v.count}: ${v.sample}`).join('  ;;  ') || 'none'}`),
-            h(Text, { muted: true }, [...samples.entries()].map(([n, s]) => `${n} [type=${s.type || '?'}] via=${s.via || '?'} keys=${s.keys || '∅'} style=${s.style || '∅'} size=${s.size} uri=${s.uri}`).join(' ;; ') || ''),
             h(Text, { muted: true }, `resolution per matched name (first 10): ${[...resolutions.entries()].map(([n, r]) => `${n}=${r}`).join(' , ') || 'none'}`),
             h(Text, { accessibilityRole: 'header' }, 'Preset icon packs'),
             h(Button, { text: `${!store.pack ? '✓ ' : ''}Original / theme icons`, onPress: () => { engine.retry(); r.set('pack', ''); } }),
@@ -242,48 +191,6 @@ export default function factory(r) {
         start() {
             const jsx = B.api?.react?.jsx;
             if (typeof jsx?.onJsxCreate !== 'function' || typeof jsx?.deleteJsxCreate !== 'function') throw new Error('Snow JSX icon hooks are unavailable.');
-            r.own(() => {});
-            r.patch('after', React, 'createElement', (_args, result) => {
-                if (!enabled || !r.active || !React.isValidElement(result)) return result;
-                if (result.type === IconReplacement) return result;
-                const props = result.props;
-                if (!props || typeof props !== 'object') return result;
-                createSeen++;
-                probeAssetProps(props);
-                const hitsName = typeof props.name === 'string' ? props.name : '';
-                const named = hitsName && iconNames.has(hitsName);
-                const asset = named ? null : assetNameFrom(props);
-                if (!named && !asset) {
-                    if ('name' in props) probeElement(result.type || _args?.[0], props);
-                    return result;
-                }
-                if ('name' in props) probeElement(result.type || _args?.[0], props);
-                const typeName = typeof result.type === 'string' ? result.type : (result.type?.displayName || result.type?.name || result.type?.type?.name || '');
-                if (sdkIcons.includes(typeName) && !asset) return result;
-                if (named) {
-                    genericHits.set('createElement', (genericHits.get('createElement') || 0) + 1);
-                    hits++;
-                    return h(IconReplacement, { element: result, name: hitsName, via: 'prop', key: result.key });
-                }
-                const resolved = engine.resolve(asset.source);
-                if (!resolved) return result;
-                genericHits.set('asset', (genericHits.get('asset') || 0) + 1);
-                hits++;
-                return h(IconReplacement, { element: result, name: resolved.name, override: resolved, via: 'asset', key: result.key });
-            });
-            for (const name of ['Icon', 'RowIcon', 'IconImage', 'ImgIcon', 'D', 'X']) {
-                if (sdkIcons.includes(name)) continue;
-                const callback = (_Component, element) => {
-                    if (!enabled || !r.active || !React.isValidElement(element)) return;
-                    genericHits.set(name, (genericHits.get(name) || 0) + 1);
-                    const propName = typeof element.props?.name === 'string' ? element.props.name : '';
-                    if (!propName) return;
-                    hits++;
-                    return h(IconReplacement, { element, name: propName });
-                };
-                jsx.onJsxCreate(name, callback);
-                r.own(() => jsx.deleteJsxCreate(name, callback));
-            }
             for (const name of sdkIcons) {
                 const callback = (_Component, element) => {
                     if (!enabled || !r.active || !React.isValidElement(element)) return;
