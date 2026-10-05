@@ -7,6 +7,19 @@ const React = require('react');
 const Renderer = require('react-test-renderer');
 const root = path.resolve(__dirname,'..');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+test('Discord requests use the existing HTTP client, preserve rate limits, and never read credentials', async()=>{
+    let request, failure, complete;
+    const http={get:async value=>{request=value;return {status:200,body:{id:'example'}};},post:async value=>{request=value;if(failure)throw failure;return new Promise(resolve=>{complete=resolve;});},put(){},del(){}};
+    const {r}=await harness({},[http,{getToken(){throw new Error('Must not read token');}}]);
+    assert.deepEqual((await r.discord('/users/example')).json(),{id:'example'});
+    assert.deepEqual(request,{url:'/users/example'});
+    failure={status:429,body:{message:'Rate limited',retry_after:3}};
+    await assert.rejects(r.discord('/test',{method:'POST',body:'{"a":1}'}),e=>e.status===429&&e.retryAfter===3);
+    assert.deepEqual(request,{url:'/test',body:{a:1}});
+    failure=null; const pending=r.discord('/test',{method:'POST'}); await r.dispose(); complete({status:200,body:{}});
+    await assert.rejects(pending,/stopped/);
+    await assert.rejects(r.discord('//other.example'),/Invalid/);
+});
 async function harness(defaults = {}, modules = []) {
     const {createRuntime} = await import('../src/runtime.js');
     const commands = new Map(), events = new Map(), sheets = new Map(), hooks = new Map(), toasts = [], calls = [];
@@ -19,7 +32,8 @@ async function harness(defaults = {}, modules = []) {
     const C={...D,SettingsPage:'SettingsPage',RowIcon:'RowIcon'};
     const common={React,ReactNative:RN,components:D,clipboard:{setString:s=>calls.push(s)},FluxDispatcher:{dispatch:e=>{for(const fn of events.get(e.type)||[])fn(e);}},url:{openURL:u=>calls.push(u)}};
     const metro={common,findByProps:(...props)=>modules.find(m=>props.every(p=>p in m)),findByName:name=>modules.find(m=>m.name===name),findByDisplayName:name=>modules.find(m=>m.displayName===name),findByStoreName:name=>modules.find(m=>m.storeName===name)};
-    const commandApi={registerCommand:c=>{assert(!commands.has(c.name));commands.set(c.name,c);return()=>commands.delete(c.name);}};
+    let commandId = -1;
+    const commandApi={registerCommand:c=>{assert(!commands.has(c.name));c.id=String(--commandId);commands.set(c.name,c);return()=>commands.delete(c.name);}};
     const flux={subscribe:(name,fn)=>{if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);return()=>events.get(name).delete(fn);}};
     const ui={components:C,showToast:m=>toasts.push(m),openAlert:(key,e)=>sheets.set(key,e),dismissAlert:key=>sheets.delete(key),sheets:{showSheet:(key,Component)=>sheets.set(key,Component),hideSheet:key=>sheets.delete(key)}};
     const B={React,ReactNative:RN,metro,commands:commandApi,patcher,flux,plugin:{id:'test',createStorage:initial=>{for(const [k,v] of Object.entries(initial||{})) if(store[k]===undefined) store[k]=v; return store;},flushStorage:async()=>{},useProxy:()=>store},ui,api:{commands:commandApi,patcher,flux,ui,react:{jsx:{onJsxCreate:(name,fn)=>hooks.set(name,fn),deleteJsxCreate:(name,fn)=>{if(hooks.get(name)===fn)hooks.delete(name);}}}}};
@@ -28,7 +42,7 @@ async function harness(defaults = {}, modules = []) {
 }
 test('all Bunny spec-3 artifacts export definePlugin and match the hosted manifest', async()=>{
     const registry=JSON.parse(fs.readFileSync(path.join(root,'src/registry.json')));
-    assert.equal(registry.length,17);
+    assert.equal(registry.length,19);
     for(const meta of registry){
         const manifest=JSON.parse(fs.readFileSync(path.join(root,meta.folder,'manifest.json')));
         const bytes=fs.readFileSync(path.join(root,meta.folder,manifest.main));
@@ -94,7 +108,7 @@ test('shared URL handlers preserve fallback and independent unload order',async(
 test('PreviewFile rejects big/binary/foreign content and preserves signed CDN URL',async()=>{
     const {default:factory,attachmentUrl,previewable}=await import('../src/plugins/preview-file.js');assert.equal(previewable({filename:'a.txt',size:999999}),false);assert.throws(()=>attachmentUrl('https://example.com/attachments/a'));const url='https://cdn.discordapp.com/attachments/1/2/a.txt?ex=123&hm=signature';assert.equal(attachmentUrl(url),url);
     const {r,commands,sheets}=await harness();const p=factory(r);r.request=async()=>({text:'a\u0000b',response:{headers:{get:()=>null}}});await assert.rejects(p.load({url,filename:'a.txt',size:3}),/Binary/);
-    r.request=async()=>({text:'hello file',response:{headers:{get:()=>null}}});p.start();assert.equal(await commands.get('previewfile').execute([{name:'url',value:url}]),undefined);assert.equal(sheets.size,1);await r.dispose();
+    r.request=async()=>({text:'hello file',response:{headers:{get:()=>null}}});p.start();assert.equal(commands.has('previewfile'),false);assert.equal(sheets.size,0);await r.dispose();
 });
 test('image conversion preserves PNG/APNG bytes and converts actual JPEG to PNG',async()=>{
     const {toPng,encodePng,encode64,decode64}=await import('../src/image-conversion.js');const UPNG=require('upng-js'),jpeg=require('jpeg-js');const rgba=Uint8Array.from([255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255]);
@@ -125,11 +139,244 @@ test('all production bundles start, render settings and stop',async()=>{
     const registry=JSON.parse(fs.readFileSync(path.join(root,'src/registry.json')));
     for(const meta of registry){const fixture=await harness(),manifest=JSON.parse(fs.readFileSync(path.join(root,meta.folder,'manifest.json')));let definition,tree;
         const silent={log(){},info(){},warn(){},error(){},debug(){}};
-        const sandbox={plugin:undefined,bunny:fixture.B,definePlugin:d=>d,console:silent,URL,AbortController,setTimeout,clearTimeout,fetch:async()=>({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify([])})};
+        const sandbox={plugin:undefined,bunny:fixture.B,definePlugin:d=>d,console:silent,URL,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,fetch:async()=>({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify([])})};
         vm.runInNewContext(fs.readFileSync(path.join(root,meta.folder,manifest.main),'utf8'),sandbox);
         definition=sandbox.plugin&&(sandbox.plugin.default||sandbox.plugin);
         try{await definition.start();await tick();await Renderer.act(async()=>{tree=Renderer.create(definition.SettingsComponent());});}
         finally{await Renderer.act(async()=>tree?.unmount());await definition.stop();await fixture.r.dispose();}
         assert.equal(fixture.commands.size,0,meta.folder);assert.equal(fixture.hooks.size,0,meta.folder);assert.equal(fixture.sheets.size,0,meta.folder);
     }
+});
+
+test('SDK command return stays with loader; nested defaults and alerts are isolated', async()=>{
+    const first=await harness({nested:{list:[]}}), second=await harness({nested:{list:[]}});
+    first.r.store.nested.list.push('x'); assert.deepEqual(second.r.store.nested.list,[]);
+    let sends=0; first.r.send=async()=>{sends++;return true;};
+    first.r.command({name:'sdk-return',description:'Fixture',execute:()=>({content:'hello'})});
+    assert.deepEqual(await first.commands.get('sdk-return').execute([],{channel:{id:'123456'}}),{content:'hello'});
+    assert.equal(sends,0);
+    first.r.api.ui.openAlert('fixture',React.createElement('Alert'));
+    await first.r.dispose();assert.equal(first.sheets.size,0);await second.r.dispose();
+});
+
+test('Rain-compatible settings sections coexist, do not mutate callers, and unload in either order',async()=>{
+    const {registerSection}=await import('../src/settings-section.js');
+    for(const reverse of [false,true]) {
+        const constants={SETTING_RENDERER_CONFIG:{ACCOUNT:{type:'route'}}};
+        const original=constants.SETTING_RENDERER_CONFIG, lists={createList:config=>config};
+        const a=await harness({},[constants,lists]),b=await harness({},[constants,lists]);
+        registerSection(a.r,{name:'Custom',items:[{key:'A',title:()=> 'A',onPress:()=>{}}]});
+        registerSection(b.r,{name:'Custom',items:[{key:'B',title:()=> 'B',onPress:()=>{}}]});
+        const input={sections:[{settings:['ACCOUNT']}]};
+        assert.deepEqual(new Set(lists.createList(input).sections[0].settings),new Set(['A','B']));
+        assert.equal(input.sections.length,1);assert(constants.SETTING_RENDERER_CONFIG.A);assert(constants.SETTING_RENDERER_CONFIG.B);
+        await (reverse?b:a).r.dispose();assert.equal(lists.createList(input).sections[0].settings.length,1);
+        await (reverse?a:b).r.dispose();assert.equal(constants.SETTING_RENDERER_CONFIG,original);
+        assert.equal(lists.createList(input),input);
+    }
+});
+
+test('settings do not invent a facade method when settings namespaces are empty',async()=>{
+    const {registerSection}=await import('../src/settings-section.js');const {r}=await harness();let registered=0;
+    r.B.ui.settings={};r.B.api.settings={};
+    assert.equal(registerSection(r,{name:'Test',items:[]}),false);assert.equal(registered,0);await r.dispose();
+});
+
+test('Nighty validates URLs, requires toggle plus prefix plus attachment, and sends a non-pinging reply once',async()=>{
+    const {default:factory,pageUrl,canDownload}=await import('../src/plugins/nighty-tab.js');
+    assert.equal(pageUrl('javascript:alert(1)'),null);assert.equal(pageUrl('https://user:pass@example.com'),null);
+    assert.equal(pageUrl('https://example.com/path'),'https://example.com/path');
+    const message={id:'123',channel_id:'456',attachments:[{id:'789'}]};
+    for (const values of [{scriptUtils:false,nightyPrefix:'.'},{scriptUtils:true,nightyPrefix:''},{scriptUtils:true,nightyPrefix:' '},{scriptUtils:true,nightyPrefix:'ab'}]) assert.equal(canDownload(values,message),false);
+    assert.equal(canDownload({scriptUtils:true,nightyPrefix:'.'},{...message,attachments:[]}),false);
+    let sent=[],finish;
+    const http={get(){},put(){},del(){},post:req=>{sent.push(req);return new Promise(resolve=>finish=resolve);}};
+    const {r}=await harness({...factory.defaults,scriptUtils:true},[http]);
+    const plugin=factory(r),pending=plugin.download(message);await plugin.download(message);assert.equal(sent.length,1);
+    assert.equal(sent[0].body.content,'.dls');assert.equal(sent[0].body.message_reference.message_id,'123');
+    assert.deepEqual(sent[0].body.allowed_mentions,{parse:[],replied_user:false});finish();await pending;
+    await r.dispose();await plugin.download(message);assert.equal(sent.length,1);
+});
+
+test('Nighty lazy menus stay bound to the opened message, recheck toggles and clean up pending opens',async()=>{
+    const {default:factory}=await import('../src/plugins/nighty-tab.js');
+    const opened=[];const sheets={openLazy:(component,key,props)=>opened.push({component,key,props}),hideActionSheet(){}};
+    let sends=[];const http={get(){},put(){},del(){},post:async req=>sends.push(req)};
+    const {r}=await harness({...factory.defaults,scriptUtils:true},[sheets,http]);const plugin=factory(r);plugin.start();
+    function ActionSheetRow(){return null;}function ActionSheetRowGroup(){return null;}
+    const module={default:()=>React.createElement('View',null,React.createElement(ActionSheetRowGroup,null,[React.createElement(ActionSheetRow,{key:'original',label:'Original'})]))};
+    for(const id of ['a','b']) sheets.openLazy(Promise.resolve(module),'MessageLongPressActionSheet',{message:{id,channel_id:'ch',attachments:[{}]}});
+    const a=await opened[0].component,b=await opened[1].component;
+    const rows=component=>component.default({}).props.children.props.children;
+    rows(a)[1].props.onPress();await tick();rows(b)[1].props.onPress();await tick();
+    assert.deepEqual(sends.map(s=>s.body.message_reference.message_id),['a','b']);
+    assert.equal(module.default({}).props.children.props.children.length,1);
+    r.set('scriptUtils',false);assert.equal(rows(a).length,1);r.set('scriptUtils',true);
+    let resolve;sheets.openLazy(new Promise(r=>resolve=r),'MessageLongPressActionSheet',{message:{id:'c',channel_id:'ch',attachments:[{}]}});
+    await r.dispose();resolve(module);assert.equal(await opened[2].component,module);assert.equal(rows(a).length,1);
+});
+
+test('Nighty WebView has isolated cookies, no credential bridge, and reports invalid URL',async()=>{
+    const {default:factory}=await import('../src/plugins/nighty-tab.js');
+    const {r}=await harness({...factory.defaults,url:'https://example.com'},[{WebView:'WebView'}]);const plugin=factory(r);let tree;
+    await Renderer.act(async()=>{tree=Renderer.create(React.createElement(plugin.NightyPage));});
+    const props=tree.root.findByType('WebView').props;
+    assert.equal(props.sharedCookiesEnabled,false);assert.equal(props.thirdPartyCookiesEnabled,false);assert.equal(props.onMessage,undefined);
+    assert.equal(props.injectedJavaScript,undefined);assert.equal(props.onShouldStartLoadWithRequest({url:'file:///local'}),false);
+    await Renderer.act(async()=>{r.set('url','bad');});assert.match(JSON.stringify(tree.toJSON()),/valid HTTP/);
+    await Renderer.act(async()=>tree.unmount());await r.dispose();
+});
+
+test('Pin DMs preserves account isolation, categories, colors, moves, transfers and unpinning',async()=>{
+    const {createPinData}=await import('../src/plugins/pin-dms-data.js');let user='alice';
+    const {r}=await harness({userBasedCategoryList:{}},[{storeName:'UserStore',getCurrentUser:()=>({id:user})}]);const d=createPinData(r);
+    const first=d.save(null,'First',0xabcdef,'one'),second=d.save(null,'Second',0x123456,'two');
+    d.pin('three',first);d.moveChannel('three',-1);assert.deepEqual(d.categories()[0].channels,['three','one']);
+    d.moveCategory(second,-1);assert.equal(d.categories()[0].id,second);d.save(first,'Renamed',0xff0000);
+    d.collapse(first);assert.equal(d.categories()[1].collapsed,true);assert.equal(d.categories()[1].color,0xff0000);
+    d.pin('one',second);assert.deepEqual(d.categories()[1].channels,['three']);d.unpin('one');assert.deepEqual(d.categories()[0].channels,['two']);
+    user='bob';assert.deepEqual(d.categories(),[]);d.save(null,'Bob',0);user='alice';assert.equal(d.categories().length,2);
+    d.remove(first);assert.equal(d.categories().length,1);assert.throws(()=>d.save(null,'',0));
+    user=null;assert.throws(()=>d.save(null,'No account',0),/Sign in/);await r.dispose();
+});
+
+test('Pin DMs section projection matches recency/custom order, collapse and selected row rules',async()=>{
+    const {sectionsFor}=await import('../src/plugins/pin-dms-data.js');
+    const categories=[{id:'cat',name:'Pins',channels:['one','two','missing'],collapsed:false}];
+    const settings={pinOrder:0,canCollapseDmSection:true,dmSectionCollapsed:false};
+    const recent=['three','two','one'];const exists=id=>id!=='missing';
+    assert.deepEqual(sectionsFor(categories,settings,recent,'one',exists).map(s=>s.data),[['two','one'],['three']]);
+    settings.pinOrder=1;assert.deepEqual(sectionsFor(categories,settings,recent,'one',exists)[0].data,['one','two']);
+    categories[0].collapsed=true;settings.dmSectionCollapsed=true;
+    assert.deepEqual(sectionsFor(categories,settings,recent,'one',exists).map(s=>s.data),[['one'],[]]);
+    settings.canCollapseDmSection=false;assert.deepEqual(sectionsFor(categories,settings,recent,'one',exists)[1].data,['three']);
+});
+
+test('Pin DMs native list wraps only supported private-channel shapes and updates without mutating rows',async()=>{
+    const {default:factory}=await import('../src/plugins/pin-dms.js');const channels={a:{id:'a',type:1},b:{id:'b',type:3},g:{id:'g',type:0}};
+    const modules=[{storeName:'ChannelStore',getChannel:id=>channels[id]},{storeName:'UserStore',getCurrentUser:()=>({id:'test-user'})},{storeName:'PrivateChannelSortStore',getPrivateChannelIds:()=>['a','b']}];
+    const {r}=await harness(factory.defaults,modules);const p=factory(r);p.data.save(null,'Pinned',0,'b');
+    const values=[channels.a,channels.b], renderItem=({item,index})=>React.createElement('DM',{id:item.id,index});
+    const element=React.createElement('FlatList',{data:values,renderItem});const wrapped=p.adaptList(element);assert(wrapped);
+    assert.equal(p.adaptList(React.createElement('FlatList',{data:[channels.g],renderItem})),undefined);
+    assert.equal(p.adaptList(React.createElement('FlatList',{data:values,renderItem,getItemLayout(){}})),undefined);
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(wrapped);});let flat=tree.root.findByType('FlatList');
+    assert.deepEqual(flat.props.data.filter(v=>v.id).map(v=>v.id),['b','a']);assert.equal(flat.props.renderItem({item:{id:'b'}}).props.index,1);
+    assert.equal(element.props.data,values);assert.deepEqual(values,[channels.a,channels.b]);
+    await Renderer.act(async()=>{p.data.collapse(p.data.categories()[0].id);});flat=tree.root.findByType('FlatList');
+    assert.deepEqual(flat.props.data.filter(v=>v.id).map(v=>v.id),['a']);
+    await Renderer.act(async()=>tree.unmount());await r.dispose();
+});
+
+test('registrar owns IDs and command-list insertion, preserving shouldHide and automatic results',async()=>{
+    const module={getBuiltInCommands:()=>['original']},original=module.getBuiltInCommands;
+    const {r,commands}=await harness({},[module]);let sends=0;
+    r.B.commands.registerCommand=command=>{
+        command.id='-987';const execute=command.execute;
+        command.execute=async(...args)=>{const result=await execute(...args);if(result?.content)sends++;};
+        commands.set(command.name,command);return()=>commands.delete(command.name);
+    };
+    const hidden=()=>true;r.command({name:'owned',description:'Fixture',shouldHide:hidden,execute:()=>({content:'one'})});
+    assert.equal(commands.get('owned').id,'-987');assert.equal(commands.get('owned').shouldHide,hidden);
+    assert.equal(module.getBuiltInCommands,original);await commands.get('owned').execute([],{channel:{id:'ch'}});assert.equal(sends,1);
+    await r.dispose();assert.equal(commands.size,0);
+});
+
+test('shared controls subscribe to owned storage and never pass modern props to CompatButton',async()=>{
+    const {ui}=await import('../src/runtime.js');const {r}=await harness();let subscriptions=0;
+    r.B.plugin.useProxy=value=>{assert.equal(value,r.store);subscriptions++;return value;};
+    delete r.D.Button;r.C.Button='CompatButton';
+    const U=ui(r);function View(){r.useRefresh();return React.createElement(U.Button,{text:'Native fallback',onPress(){}});}
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(React.createElement(View));});
+    assert(subscriptions>0);assert.equal(tree.root.findAllByType('CompatButton').length,0);
+    assert.equal(tree.root.findByType('Pressable').props.accessibilityRole,'button');
+    await Renderer.act(async()=>tree.unmount());await r.dispose();
+});
+
+test('runtime migrates missing defaults without overwriting false and isolates new nested defaults',async()=>{
+    const {createRuntime}=await import('../src/runtime.js');const defaults={enabled:true,nested:{list:[]}};
+    const a=await harness(),b=await harness();
+    a.B.plugin.createStorage=initial=>initial;b.B.plugin.createStorage=initial=>initial;
+    const x=createRuntime(a.B,{name:'a',id:'a'},defaults),y=createRuntime(b.B,{name:'b',id:'b'},defaults);
+    x.store.nested.list.push('a');assert.deepEqual(y.store.nested.list,[]);assert.deepEqual(defaults.nested.list,[]);
+    const existing={enabled:false};a.B.plugin.createStorage=()=>existing;
+    const migrated=createRuntime(a.B,{name:'c',id:'c'},defaults);assert.equal(migrated.store.enabled,false);assert.deepEqual(existing.nested.list,[]);
+    await Promise.all([a.r.dispose(),b.r.dispose(),x.dispose(),y.dispose(),migrated.dispose()]);
+});
+
+test('stop cancels pending waits and prevents local output, copies and dialogs after stop',async()=>{
+    const {r,calls,sheets}=await harness();const pending=r.wait(60000);await r.dispose();
+    await assert.rejects(pending,/stopped/);r.local('ch','late');r.copy('late');r.api.ui.openAlert('late','late');
+    assert.equal(calls.length,0);assert.equal(sheets.size,0);assert.throws(()=>r.open('late',()=>null),/stopped/);
+});
+
+test('settings use the Rain navigation route and keep the second plugin functional after first stops',async()=>{
+    const {registerSection}=await import('../src/settings-section.js');
+    const constants={SETTING_RENDERER_CONFIG:{ACCOUNT:{type:'route'}}},lists={createList:config=>config};
+    let route,backs=0,options;
+    const nav={navigate:(name,params)=>{route={name,params};},goBack:()=>{backs++;route=null;},getCurrentRoute:()=>route,setOptions:v=>{options=v;}};
+    const ref={getRootNavigationRef:()=>nav};
+    const a=await harness({},[constants,lists,ref]),b=await harness({},[constants,lists,ref]);
+    a.r.meta.id='a';b.r.meta.id='b';
+    a.common.NavigationNative=b.common.NavigationNative={useRoute:()=>route,useNavigation:()=>nav};
+    for(const [fixture,key] of [[a,'A'],[b,'B']])registerSection(fixture.r,{name:key,items:[{key,title:()=>key,render:async()=>({default:()=>React.createElement('Page',{id:key})})}]});
+    await constants.SETTING_RENDERER_CONFIG.A.onPress();assert.equal(route.name,'MIME_PLUGIN_SETTINGS_PAGE');assert.equal(a.sheets.size,0);
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(React.createElement(constants.SETTING_RENDERER_CONFIG.MIME_PLUGIN_SETTINGS_PAGE.screen.getComponent()));});
+    assert.equal(tree.root.findByType('Page').props.id,'A');assert.equal(options.title,'A');await Renderer.act(async()=>tree.unmount());
+    await a.r.dispose();assert.equal(backs,1);
+    await constants.SETTING_RENDERER_CONFIG.B.onPress();assert.equal(route.params.owner,'b');
+    assert(lists.createList({sections:[{settings:['ACCOUNT']}]}).sections.some(s=>s.label==='B'));
+    await b.r.dispose();assert.equal(backs,2);assert.equal(constants.SETTING_RENDERER_CONFIG.MIME_PLUGIN_SETTINGS_PAGE,undefined);
+});
+
+test('Nighty accepts native message models and nested HTTP exports without reading credentials',async()=>{
+    const {default:factory,canDownload}=await import('../src/plugins/nighty-tab.js');
+    const message={id:'message',getChannelId:()=> 'native-channel',attachments:[{}]};let sent;
+    const http={HTTP:{post:async req=>{sent=req;}},get(){},post(){throw new Error('Wrong export');},put(){},patch(){},del(){}};
+    const {r}=await harness({...factory.defaults,scriptUtils:true},[http,{getToken(){throw new Error('Must not read token');}}]);
+    assert(canDownload(r.store,message));await factory(r).download(message);assert.equal(sent.url,'/channels/native-channel/messages');
+    assert.equal(sent.body.message_reference.channel_id,'native-channel');await r.dispose();
+});
+
+test('Pin category Save waits for persistence, retries the same category and rejects account changes',async()=>{
+    const {default:factory}=await import('../src/plugins/pin-dms.js');let user='one';
+    const {r}=await harness(factory.defaults,[{storeName:'UserStore',getCurrentUser:()=>({id:user})}]);const p=factory(r);let close=0,tree;
+    const old=console.error;console.error=()=>{};
+    try {
+        r.B.plugin.flushStorage=async()=>{throw new Error('Disk failure');};
+        await Renderer.act(async()=>{tree=Renderer.create(React.createElement(p.Editor,{close:()=>close++}));});
+        await Renderer.act(async()=>{await tree.root.findAllByType('Button').find(b=>b.props.text==='Save').props.onPress();});
+        assert.equal(close,0);assert.equal(p.data.categories().length,1);const saved=p.data.categories()[0].id;
+        r.B.plugin.flushStorage=async()=>{};
+        await Renderer.act(async()=>{await tree.root.findAllByType('Button').find(b=>b.props.text==='Save').props.onPress();});
+        assert.equal(close,1);assert.equal(p.data.categories().length,1);assert.equal(p.data.categories()[0].id,saved);
+        user='two';await Renderer.act(async()=>{await tree.root.findAllByType('Button').find(b=>b.props.text==='Save').props.onPress();});
+        assert.equal(p.data.categories().length,0);assert.equal(close,1);
+    } finally {console.error=old;await Renderer.act(async()=>tree?.unmount());await r.dispose();}
+});
+
+test('InstallLinks uses supported manual installation and restores URL regex patches',async()=>{
+    const {default:factory}=await import('../src/plugins/install-links.js');
+    const parser={URL_REGEX:/https?:\/\/[^ ]+/};const original=parser.URL_REGEX;
+    const {r,commands,sheets,calls}=await harness({},[parser]);let forbidden=0;
+    r.B.native={previewExternalPlugin(){forbidden++;throw new Error('Unsupported');}};
+    r.B.plugins={installPlugin(){forbidden++;throw new Error('Unsupported');}};
+    const p=factory(r);p.start();
+    const result=await commands.get('installplugin').execute([{name:'url',value:'https://example.com/plugin/'}]);
+    assert.equal(result,undefined);assert.equal(forbidden,0);assert.equal(calls.length,0);assert.equal(sheets.size,1);
+    let tree;await Renderer.act(async()=>{tree=Renderer.create(React.createElement([...sheets.values()][0]));});
+    assert.match(JSON.stringify(tree.toJSON()),/Install from URL/);
+    await Renderer.act(async()=>tree.root.findAllByType('Button').find(b=>b.props.text==='Copy manifest URL').props.onPress());
+    assert.deepEqual(calls,['https://example.com/plugin/manifest.json']);
+    await Renderer.act(async()=>tree.unmount());p.stop();await r.dispose();assert.equal(parser.URL_REGEX,original);
+});
+
+test('GifRoulette and MoreCommands coexist with distinct SDK command names',async()=>{
+    const {default:gifs}=await import('../src/plugins/gif-roulette.js');const {default:more}=await import('../src/plugins/more-commands.js');
+    const fixture=await harness({},[{getFavoriteGIFs:()=>['https://example.com/favorite.gif']}]);
+    gifs(fixture.r).start();more(fixture.r).start();
+    assert(fixture.commands.has('gifroulette'));assert(fixture.commands.has('more-gifroulette'));
+    assert.deepEqual(await fixture.commands.get('gifroulette').execute([],{channel:{id:'ch'}}),{content:'https://example.com/favorite.gif'});
+    assert.deepEqual(await fixture.commands.get('more-gifroulette').execute([],{channel:{id:'ch'}}),{content:'https://example.com/favorite.gif'});
+    await fixture.r.dispose();
 });

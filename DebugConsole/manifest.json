@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.debugconsole",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "display": {
     "name": "DebugConsole",
     "description": "Readable live logs with clear, copy, search and severity filters.",

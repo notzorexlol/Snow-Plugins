@@ -1,19 +1,18 @@
 {
   "spec": 3,
   "type": "plugin",
-  "id": "mime.openinapp",
-  "version": "1.2.4",
+  "id": "mime.pindms",
+  "version": "1.0.0",
   "display": {
-    "name": "OpenInApp",
-    "description": "Open Steam, Telegram, Instagram, TikTok and other service links in their apps.",
+    "name": "Pin DMs",
+    "description": "Per-account DM categories, colors, ordering and collapsible sections for mobile.",
     "authors": [
       {
         "name": "Vendicated",
         "id": "343383572805058560"
       },
       {
-        "name": "Chloe",
-        "id": "1084592643784331324"
+        "name": "Aria"
       },
       {
         "name": "Mime | N0_.q3",
@@ -24,7 +23,7 @@
   "main": "index.js",
   "extras": {
     "license": "GPL-3.0-or-later",
-    "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/OpenInApp",
+    "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/PinDms",
     "bunny": {}
   }
 }

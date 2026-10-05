@@ -191,7 +191,7 @@ export function ValidUser(r) {
         if (pending.has(id)) return pending.get(id);
         const wait = Math.max(0, next - Date.now());
         next = Date.now() + 1200;
-        const task = (wait ? new Promise(ok => setTimeout(ok, wait)) : Promise.resolve()).then(() => r.discord(`/users/${id}`)).then(result => {
+        const task = (wait ? r.wait(wait) : Promise.resolve()).then(() => r.discord(`/users/${id}`)).then(result => {
             const user = result.json();
             if (!user?.id || !user?.username) throw new Error('User could not be resolved');
             r.common.FluxDispatcher?.dispatch?.({ type: 'USER_UPDATE', user });

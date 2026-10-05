@@ -17,10 +17,10 @@ var plugin = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // TokenUtils.entry.js
-  var TokenUtils_entry_exports = {};
-  __export(TokenUtils_entry_exports, {
-    default: () => TokenUtils_entry_default
+  // NightyTab.entry.js
+  var NightyTab_entry_exports = {};
+  __export(NightyTab_entry_exports, {
+    default: () => NightyTab_entry_default
   });
 
   // project:src/runtime.js
@@ -526,106 +526,258 @@ var plugin = (() => {
     });
   }
 
-  // project:src/plugins/token-utils.js
-  function sessionToken(r) {
-    const token = r.find("getToken")?.getToken?.() || r.byStore("AuthenticationStore")?.getToken?.() || r.find("getToken", "setToken")?.getToken?.();
-    if (!token) throw new Error("Session token unavailable");
-    return String(token);
-  }
-  function arg(args, name) {
-    const found = (args || []).find((item) => item && item.name === name);
-    return found && found.value != null ? String(found.value).trim() : "";
-  }
-  function TokenUtils(r) {
-    const { h, D, C } = r, { Page, Text } = ui(r);
-    const AlertModal = D.AlertModal || C.AlertModal;
-    const AlertActions = D.AlertActions || C.AlertActions;
-    const AlertActionButton = D.AlertActionButton || C.AlertActionButton;
-    function alert(id, title, body, actions) {
-      if (!AlertModal || !AlertActions || !AlertActionButton) {
-        r.toast(body);
-        return;
+  // project:src/settings-section.js
+  function registerSection(r, section) {
+    const constants = r.find("SETTING_RENDERER_CONFIG");
+    const lists = r.find("createList");
+    if (!constants || !lists || !r.api.patcher?.before) return false;
+    const navigationRef = r.find("getRootNavigationRef");
+    const navigation = r.common.NavigationNative;
+    const routeName = "MIME_PLUGIN_SETTINGS_PAGE";
+    const canNavigate = navigationRef && navigation?.useRoute && navigation?.useNavigation;
+    const key = /* @__PURE__ */ Symbol.for("mime.snow.settingsSections.v2");
+    let hub = constants[key];
+    if (!hub) {
+      let CustomPageRenderer = function() {
+        const route = navigation.useRoute();
+        const nav = navigation.useNavigation();
+        r.React.useEffect(() => {
+          nav.setOptions({ title: route.params.title });
+        }, [nav, route.params.title]);
+        return route.params.render();
+      };
+      const descriptor = Object.getOwnPropertyDescriptor(constants, "SETTING_RENDERER_CONFIG");
+      if (!descriptor?.configurable) return false;
+      const entries = /* @__PURE__ */ new Map();
+      let value = constants.SETTING_RENDERER_CONFIG;
+      const get = () => {
+        const base = descriptor.get ? descriptor.get.call(constants) : value;
+        const extra = {};
+        if (canNavigate) extra[routeName] = {
+          type: "route",
+          useTitle: () => "Plugin",
+          screen: { route: routeName, getComponent: () => CustomPageRenderer }
+        };
+        for (const { runtime, section: s } of entries.values()) for (const row of s.items) {
+          extra[row.key] = {
+            type: "pressable",
+            icon: row.icon,
+            IconComponent: row.IconComponent || (() => null),
+            useTitle: row.title,
+            usePredicate: row.usePredicate,
+            useTrailing: row.useTrailing,
+            withArrow: true,
+            onPress: row.onPress || (async () => {
+              try {
+                const page = await row.render();
+                if (!runtime.active) return;
+                if (canNavigate) {
+                  const nav = navigationRef.getRootNavigationRef();
+                  nav.navigate(routeName, {
+                    title: row.title(),
+                    owner: runtime.meta.id,
+                    render: () => runtime.active ? runtime.h(page.default, { close: () => nav.goBack() }) : null
+                  });
+                } else runtime.open(row.key, page.default, {}, { scrollable: false });
+              } catch (error) {
+                if (runtime.active) runtime.error("Open settings page", error);
+              }
+            }),
+            ...row.rawTabsConfig
+          };
+        }
+        return { ...base, ...extra };
+      };
+      Object.defineProperty(constants, "SETTING_RENDERER_CONFIG", {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        get,
+        set: descriptor.set ? (v) => descriptor.set.call(constants, v) : (v) => {
+          value = v;
+        }
+      });
+      hub = { entries, close() {
+        if (Object.getOwnPropertyDescriptor(constants, "SETTING_RENDERER_CONFIG")?.get === get) {
+          Object.defineProperty(constants, "SETTING_RENDERER_CONFIG", descriptor.get ? descriptor : { ...descriptor, value });
+        }
+        delete constants[key];
+      } };
+      Object.defineProperty(constants, key, { value: hub, configurable: true });
+    }
+    const id = Symbol(section.name);
+    hub.entries.set(id, { runtime: r, section });
+    r.patch("before", lists, "createList", (args) => {
+      if (!r.active) return;
+      const config = args[0];
+      if (!config?.sections?.some((s) => s.settings?.includes("ACCOUNT"))) return;
+      const sections = config.sections.map((s) => ({ ...s, settings: s.settings ? [...s.settings] : s.settings }));
+      const keys = section.items.map((row) => row.key);
+      const existing = sections.find((s) => s.label === section.name);
+      if (existing) existing.settings = [.../* @__PURE__ */ new Set([...existing.settings || [], ...keys])];
+      else sections.unshift({ label: section.name, title: section.name, settings: keys });
+      args[0] = { ...config, sections };
+    });
+    r.own(() => {
+      if (canNavigate) {
+        const nav = navigationRef.getRootNavigationRef();
+        const current = nav?.getCurrentRoute?.();
+        if (current?.name === routeName && current.params?.owner === r.meta.id) nav.goBack();
       }
-      r.api.ui.openAlert(id, h(AlertModal, {
-        title,
-        content: body,
-        actions: h(AlertActions, null, ...actions.map((action) => h(AlertActionButton, action)))
-      }));
+      hub.entries.delete(id);
+      if (!hub.entries.size) hub.close();
+    });
+    return true;
+  }
+
+  // project:src/action-sheet.js
+  function mapTree(React, node, transform) {
+    const replacement = transform(node);
+    if (replacement !== void 0) return replacement;
+    if (Array.isArray(node)) return node.map((child) => mapTree(React, child, transform));
+    if (!React.isValidElement(node) || node.props.children == null) return node;
+    return React.cloneElement(node, {}, mapTree(React, node.props.children, transform));
+  }
+  function appendAction(r, tree, item) {
+    let inserted = false;
+    const name = (node) => node?.type?.displayName || node?.type?.name || node?.type?.type?.name;
+    const result = mapTree(r.React, tree, (node) => {
+      if (inserted || !Array.isArray(node)) return;
+      const sample = node.find((n) => name(n) === "ButtonRow" || name(n) === "ActionSheetRow");
+      if (!sample || node.some((n) => n?.key === item.key)) return;
+      inserted = true;
+      const Row = name(sample) === "ButtonRow" ? r.D.Forms?.FormRow || r.C.Forms?.FormRow || sample.type : sample.type;
+      return [...node, r.h(Row, { key: item.key, label: item.label, onPress: item.onPress, ...item.icon ? { icon: item.icon, leading: item.icon } : {} })];
+    });
+    return inserted ? result : tree;
+  }
+  function patchLazySheet(r, getItem) {
+    const sheets = r.find("openLazy", "hideActionSheet");
+    if (!sheets || !r.api.patcher?.before) return false;
+    return r.patch("before", sheets, "openLazy", (args) => {
+      const [pending, key, props] = args;
+      const item = getItem(key, props);
+      if (!item || !pending?.then) return;
+      args[0] = pending.then((module) => {
+        if (!r.active || typeof module?.default !== "function" || module.default.prototype?.isReactComponent) return module;
+        const Original = module.default;
+        function WithAction(screenProps) {
+          const tree = Original(screenProps);
+          const current = r.active ? getItem(key, screenProps?.message || screenProps?.channel ? screenProps : props) : null;
+          if (!current) return tree;
+          return appendAction(r, tree, { ...current, onPress: () => {
+            if (!r.active) return;
+            sheets.hideActionSheet();
+            Promise.resolve().then(() => current.onPress()).catch((error) => {
+              if (r.active) r.error(current.label, error);
+            });
+          } });
+        }
+        return { ...module, default: WithAction };
+      });
+    });
+  }
+
+  // project:src/plugins/nighty-tab.js
+  function pageUrl(value) {
+    try {
+      const url = new URL(String(value).trim());
+      return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+    } catch {
+      return null;
     }
-    function close(id) {
-      r.api.ui.dismissAlert(id);
+  }
+  function canDownload(settings, message) {
+    return !!settings.scriptUtils && typeof settings.nightyPrefix === "string" && Array.from(settings.nightyPrefix).length === 1 && !!settings.nightyPrefix.trim() && !!message?.id && !!messageChannelId(message) && !!message.attachments?.length;
+  }
+  function messageChannelId(message) {
+    return message?.getChannelId?.() || message?.channel_id || message?.channelId;
+  }
+  function NightyTab(r) {
+    const { h, React, RN, store } = r;
+    const { Page, Text, Button, Input, Toggle } = ui(r);
+    const iconUrl = () => store.iconType === "custom" ? pageUrl(store.customIconUrl) : `https://raw.githubusercontent.com/aboveproof/Equicord-Nighty-Tab/main/asset/icon${store.iconType === "grayscale" ? "-grayscale" : ""}.png`;
+    function Icon() {
+      r.useRefresh();
+      const uri = iconUrl();
+      return uri ? h(RN.Image, { source: { uri }, style: { width: 24, height: 24 }, accessibilityIgnoresInvertColors: true }) : null;
     }
-    function showToken() {
-      const token = sessionToken(r);
-      alert("token-utils-get", "Authorization token", token, [
-        { text: "Copy token", onPress: () => {
-          r.copy(token);
-          close("token-utils-get");
-        } },
-        { text: "Close", variant: "secondary", onPress: () => close("token-utils-get") }
-      ]);
+    const sending = /* @__PURE__ */ new Set();
+    async function download(message) {
+      if (!r.active || !canDownload(store, message) || sending.has(message.id)) return;
+      sending.add(message.id);
+      try {
+        const module = r.find("HTTP", "get", "post", "put", "patch", "del") || r.find("get", "post", "put", "del");
+        const rest = module?.HTTP || module;
+        if (typeof rest?.post !== "function") throw new Error("Discord message API unavailable");
+        const channelId = messageChannelId(message);
+        await rest.post({ url: `/channels/${channelId}/messages`, body: {
+          content: `${store.nightyPrefix}dls`,
+          message_reference: { message_id: message.id, channel_id: channelId, ...message.guild_id ? { guild_id: message.guild_id } : {} },
+          allowed_mentions: { parse: [], replied_user: false }
+        } });
+      } finally {
+        sending.delete(message.id);
+      }
     }
-    async function showInfo(token) {
-      const auth = token || sessionToken(r);
-      const data = (await r.request("https://discord.com/api/v9/users/@me", {
-        headers: { Authorization: auth }
-      })).json();
-      const username = data?.username || "unknown";
-      const display = data?.global_name || data?.globalName || username;
-      const email = data?.email || "none";
-      const number = data?.phone || "none";
-      const body = `Username: ${username}
-Display name: ${display}
-Email: ${email}
-Number: ${number}`;
-      alert("token-utils-info", "Token info", body, [
-        { text: "Copy info", onPress: () => {
-          r.copy(body);
-          close("token-utils-info");
-        } },
-        { text: "Close", variant: "secondary", onPress: () => close("token-utils-info") }
-      ]);
-    }
-    function Settings() {
+    function NightyPage({ close }) {
+      r.useRefresh();
+      const src = pageUrl(store.url);
+      const WebView = r.find("WebView")?.WebView || r.byName("WebView");
+      const [error, setError] = React.useState("");
+      const [revision, reload] = React.useState(0);
       return h(
-        Page,
-        { title: "TokenUtils" },
-        h(Text, null, "/get-token shows the current session Authorization token with a copy button."),
-        h(Text, null, "/token-info token: looks up username, display name, email, and number for that token. Omit the option to use the current session.")
+        RN.View,
+        { style: { flex: 1, minHeight: 500 } },
+        h(Text, { heading: true }, "Nighty"),
+        !src ? h(Text, null, "Set a valid HTTP or HTTPS URL in Nighty Tab settings.") : !WebView ? h(Text, null, "WebView is unavailable in this Snow build.") : h(WebView, {
+          key: `${src}:${revision}`,
+          source: { uri: src },
+          style: { flex: 1, minHeight: 440 },
+          originWhitelist: ["http://*", "https://*"],
+          javaScriptEnabled: true,
+          domStorageEnabled: true,
+          sharedCookiesEnabled: false,
+          thirdPartyCookiesEnabled: false,
+          startInLoadingState: true,
+          onShouldStartLoadWithRequest: (req) => !!pageUrl(req.url),
+          onError: (event) => setError(event.nativeEvent?.description || "Could not load Nighty."),
+          onHttpError: (event) => setError(`Nighty returned HTTP ${event.nativeEvent?.statusCode}.`),
+          onLoad: () => setError("")
+        }),
+        error ? h(Text, null, error) : null,
+        src ? h(Button, { text: "Reload", onPress: () => {
+          setError("");
+          reload((v) => v + 1);
+        } }) : null,
+        close ? h(Button, { text: "Close", onPress: close }) : null
       );
     }
-    return {
-      start() {
-        if (!r.store.warningShown) {
-          alert("token-utils-warning", "Warning!", "This script can manage tokens; We are not responsible if you get banned", [
-            { text: "OK", onPress: () => {
-              r.set("warningShown", true);
-              close("token-utils-warning");
-            } }
-          ]);
-        }
-        r.command({
-          name: "get-token",
-          description: "Show the current Authorization token",
-          execute() {
-            showToken();
-          }
-        });
-        r.command({
-          name: "token-info",
-          description: "Show username, display name, email, and number for a token",
-          options: [{ name: "token", description: "Authorization token", type: 3, required: false }],
-          async execute(args) {
-            await showInfo(arg(args, "token"));
-          }
-        });
-      },
-      Settings
-    };
+    function Settings({ close }) {
+      r.useRefresh();
+      return h(
+        Page,
+        { title: "Nighty Tab", close },
+        h(Text, null, "URL"),
+        h(Input, { value: store.url, placeholder: "https://", autoCapitalize: "none", onChange: (v) => r.set("url", v) }),
+        store.url && !pageUrl(store.url) ? h(Text, null, "Enter an HTTP or HTTPS URL without embedded credentials.") : null,
+        h(Button, { text: "Open Nighty", onPress: () => r.open("nighty", NightyPage, {}, { scrollable: false }) }),
+        h(Toggle, { setting: "scriptUtils", label: "Script Utils functions", subLabel: "Download Script replies to an attachment with your prefix followed by dls." }),
+        h(Text, null, "Nighty prefix (one character)"),
+        h(Input, { value: store.nightyPrefix, onChange: (v) => r.set("nightyPrefix", v), autoCapitalize: "none", placeholder: "." }),
+        ...["blue", "grayscale", "custom"].map((style) => h(Button, { key: style, text: `${store.iconType === style ? "\u2713 " : ""}${style} icon`, onPress: () => r.set("iconType", style) })),
+        store.iconType === "custom" ? h(Input, { value: store.customIconUrl, placeholder: "https:// image URL", autoCapitalize: "none", onChange: (v) => r.set("customIconUrl", v) }) : null,
+        h(Icon),
+        h(Text, { muted: true }, `Settings entry: ${r.status.settingsEntry ? "registered" : "unavailable"} \xB7 Message menu: ${r.status.messageMenu ? "registered" : "unavailable"}`)
+      );
+    }
+    return { Settings, NightyPage, download, start() {
+      r.status.settingsEntry = registerSection(r, { name: "Nighty", items: [{ key: "MIME_NIGHTY", title: () => "Nighty", IconComponent: Icon, render: async () => ({ default: NightyPage }) }] });
+      r.status.messageMenu = patchLazySheet(r, (key, props) => key === "MessageLongPressActionSheet" && canDownload(store, props?.message) ? { key: "mime-nighty-download", label: "Download Script", icon: h(Icon), onPress: () => download(props.message) } : null);
+    } };
   }
-  TokenUtils.defaults = { warningShown: false };
+  NightyTab.defaults = { url: "", scriptUtils: false, nightyPrefix: ".", iconType: "blue", customIconUrl: "" };
 
-  // TokenUtils.entry.js
-  var TokenUtils_entry_default = register({ "id": "mime.tokenutils", "name": "TokenUtils", "description": "/get-token and /token-info for the current Authorization token.", "version": "1.0.2", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/TokenUtils" }, TokenUtils);
-  return __toCommonJS(TokenUtils_entry_exports);
+  // NightyTab.entry.js
+  var NightyTab_entry_default = register({ "id": "mime.nightytab", "name": "Nighty Tab", "description": "Nighty in mobile settings, with optional Download Script replies.", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }, { "name": "rico | wkcp", "id": "1361736124858630274" }], "version": "1.0.0", "license": "GPL-3.0-or-later", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NightyTab" }, NightyTab);
+  return __toCommonJS(NightyTab_entry_exports);
 })();

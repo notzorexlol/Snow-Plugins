@@ -1,4 +1,6 @@
-# Snow SDK review — icon themer 1.0.1
+# Snow SDK review — icon themer 1.0.2
+
+Version 1.0.2 removes six generic JSX hooks and the React.createElement compatibility patch. Tests check the 331 documented named registrations and their cleanup.
 
 Reference: the owner-supplied **Snow Plugin Authoring Guide**, API snapshot September 8, 2026, verified against Snow commit `5b5d1e12fb3bc67931934bb063a43b2d8f20cea1`. Targets Discord iOS 343.0 build 109809, React Native 0.86.0, Hermes bytecode 98. The supplied plain/TSX starters were also inspected. This is an authoring guide and starter bundle, not a complete SDK declaration package.
 
@@ -23,4 +25,4 @@ Local tests exercise the published export shape, SDK-shaped JSX registration and
 
 The supplied TestPlugin report establishes bundled execution, storage flush, scoped patch cleanup and four available stores. It does not establish JSX match coverage or physical rendering correctness. Those remain device checks: update/reload Snow, reopen settings and a channel, inspect the observed match count, change a pack/color, test the custom warning, and disable the plugin. No guarantee is made for legacy image assets, unrelated third-party patches, or paths that bypass Snow's JSX factory.
 
-Only the IconThemer folder is changed. Existing settings, other plugins, and theme data are retained.
+The repository-wide release also updates the shared runtime and rebuilds all packages. IconThemer retains existing saved settings and theme data.

@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.highlightcode",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "display": {
     "name": "HighlightCode",
     "description": "Highlight supported native chat code blocks.",

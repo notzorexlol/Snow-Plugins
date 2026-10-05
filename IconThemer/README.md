@@ -19,7 +19,9 @@ The catalog is bundled and image URLs are pinned to repository commits. Pack dis
 
 ## Compatibility
 
-Version 1.0.1 is aligned to the September 8, 2026 Snow Plugin Authoring Guide, targeting Discord iOS 343.0 build 109809 / React Native 0.86.0. It uses `B.api.react.jsx.onJsxCreate` for the SDK's 331 named vector icons. It does not patch React Native Image, its render method, or React.createElement.
+Version 1.0.2 uses only the guide's 331 named JSX hooks. It removes six generic hooks and the broad React.createElement patch, and includes shared storage, command and cleanup fixes.
+
+This review targets the September 8, 2026 Snow Plugin Authoring Guide, Discord iOS 343.0 build 109809 / React Native 0.86.0. Current source uses `B.api.react.jsx.onJsxCreate` for 331 named vector icons. It does not patch React.createElement, React Native Image, or Image.render. Actual icon coverage and rendering still require device verification.
 
 Pack replacement images are created through documented `RN.Image` elements. Color-only overrides clone the existing icon with its documented color/style props. Existing theme color props are overridden at the intercepted element. Missing/failed pack files retain the original icon. The stored legacy settings remain intact.
 

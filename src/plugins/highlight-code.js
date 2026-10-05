@@ -369,6 +369,7 @@ function stop() {
 }
 
 function SettingsComponent() {
+    r.useRefresh();
     var React = getReact();
     if (!React) return null;
     var store = getStorage();

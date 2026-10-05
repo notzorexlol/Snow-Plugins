@@ -101,10 +101,8 @@ export async function sendFavoriteGif(r, ctx) {
     const url = pickFavoriteGif(r);
     if (!url) {
         r.local(channelId, 'No favorite GIFs found. Star a GIF in the GIF picker first.');
-        r.toast('No favorite GIFs found. Star a GIF in Discord first.');
         return;
     }
-    if (channelId && await r.send(channelId, url)) return;
     return { content: url };
 }
 

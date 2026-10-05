@@ -4,6 +4,14 @@ import { toPng } from '../image-conversion.js';
 export default function Decor(r) {
 let nativeClose;
 const uploadAborters = new Set();
+const uiTimers = new Set();
+let stopped = false;
+function schedule(callback, delay) {
+    if (stopped || !r.active) return;
+    const timer = setTimeout(() => { uiTimers.delete(timer); if (!stopped && r.active) callback(); }, delay);
+    uiTimers.add(timer);
+    return timer;
+}
 var unpatches = [];
 var _storage;
 var usersDecorations = {};
@@ -157,14 +165,6 @@ function patchMethod(kind, obj, method, cb) {
 function getReact() { return r.React; }
 
 function getRN() { return r.RN; }
-
-function getDiscordToken() {
-    var auth = findByProps("getToken");
-    try {
-        if (auth && typeof auth.getToken === "function") return auth.getToken();
-    } catch (_e) {}
-    return null;
-}
 
 function getStorage() { return r.store; }
 
@@ -702,29 +702,22 @@ function finishAuthFromRedirect(location) {
 }
 
 function authorizeSilent() {
-    var discordToken = getDiscordToken();
-    if (!discordToken) return Promise.reject(new Error("no Discord token"));
     var qs = "client_id=" + encodeURIComponent(CLIENT_ID)
         + "&response_type=code"
         + "&redirect_uri=" + encodeURIComponent(AUTHORIZE_URL)
         + "&scope=identify";
     function post(body) {
-        return doFetch("https://discord.com/api/v9/oauth2/authorize?" + qs, {
+        return r.discord("/oauth2/authorize?" + qs, {
             method: "POST",
-            headers: {
-                Authorization: discordToken,
-                "Content-Type": "application/json"
-            },
             body: JSON.stringify(body)
         });
     }
-    return post({ authorize: true, permissions: "0", integration_type: 0 }).then(function (r) {
-        if (r && (r.status === 400 || r.status === 422)) {
+    return post({ authorize: true, permissions: "0", integration_type: 0 }).catch(function (error) {
+        if (error.status === 400 || error.status === 422) {
             return post({ authorize: true, permissions: "0" });
         }
-        return r;
+        throw error;
     }).then(function (r) {
-        if (!r || !r.ok) throw new Error("http " + (r && r.status));
         return r.json();
     }).then(function (data) {
         var loc = data && (data.location || data.redirect_to || data.redirect_uri);
@@ -1651,7 +1644,7 @@ function PresetsPage() {
                 decoration: decos[j],
                 onChanged: function () {
                     notifySelection();
-                    setTimeout(closeDecorScreen, 50);
+                    schedule(closeDecorScreen, 50);
                 }
             }));
         }
@@ -1702,7 +1695,7 @@ function CustomPage() {
             decoration: mine[i],
             onChanged: function () {
                 notifySelection();
-                setTimeout(closeDecorScreen, 50);
+                schedule(closeDecorScreen, 50);
             }
         }));
     }
@@ -1750,11 +1743,12 @@ function normalizePickedImage(ret) {
 function pickImage(cb) {
     var opts = { mediaType: "photo", selectionLimit: 1, includeBase64: true, presentationStyle: "overFullScreen", includeExtra: true };
     function done(ret) {
+        if (stopped || !r.active) return;
         var n = normalizePickedImage(ret);
         if (n) {
             createDraft.asset = n;
             cb(n);
-            setTimeout(function () {
+            schedule(function () {
                 try { openDecorTab("Create", CreateDecorationPage); } catch (_e) {}
             }, 300);
         } else if (ret && !ret.didCancel && !ret.cancelled) showToast("Could not read that image");
@@ -1807,22 +1801,21 @@ function altText(v) {
 function withTimeout(promise, ms, msg) {
     return new Promise(function (resolve, reject) {
         var settled = false;
+        function finish(error, value) {
+            if (settled) return;
+            settled = true; clearTimeout(timer);
+            uploadAborters.delete(abort);
+            r.context.signal.removeEventListener('abort', abort);
+            if (error) reject(error); else resolve(value);
+        }
+        function abort() { finish(new Error('Plugin stopped')); }
         var timer = setTimeout(function () {
-            if (settled) return;
-            settled = true;
-            reject(new Error(msg || "timed out"));
+            finish(new Error(msg || "timed out"));
         }, ms);
-        Promise.resolve(promise).then(function (v) {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve(v);
-        }, function (err) {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            reject(err);
-        });
+        uploadAborters.add(abort);
+        r.context.signal.addEventListener('abort', abort, { once: true });
+        if (stopped || !r.active) abort();
+        Promise.resolve(promise).then(v => finish(null, v), error => finish(error));
     });
 }
 
@@ -2016,6 +2009,7 @@ function EditProfileDecorBlock() {
 
 function start() {
     stop();
+    stopped = false;
     patchStores();
     subscribeFlux();
     patchEditProfile();
@@ -2028,6 +2022,9 @@ function start() {
 }
 
 function stop() {
+    stopped = true;
+    for (const timer of uiTimers) clearTimeout(timer);
+    uiTimers.clear();
     for(const abort of uploadAborters) abort(); uploadAborters.clear();
     hideSheet();
     if (bulkTimer) {
@@ -2041,6 +2038,7 @@ function stop() {
 }
 
 function SettingsComponent() {
+    r.useRefresh();
     var React = getReact();
     if (!React) return null;
     var RN = getRN() || {};
@@ -2048,7 +2046,7 @@ function SettingsComponent() {
     var Text = RN.Text;
     var ScrollView = RN.ScrollView;
     var comps = (getMod().metro && getMod().metro.common && getMod().metro.common.components) || {};
-    var Button = comps.Button || comps.LegacyButton;
+    var Button = comps.Button;
     var TextInput = comps.TextInput;
     var [, bump] = React.useState(0);
     React.useEffect(function () {
@@ -2068,7 +2066,7 @@ function SettingsComponent() {
     if (Button) {
         children.push(h(View, { key: "authwrap", style: { paddingHorizontal: 12, marginTop: 8, marginBottom: 8 } }, h(Button, {
             text: authorized ? "Re-authorize" : "Authorize with Decor",
-            onPress: function () { authorize().then(refresh); setTimeout(refresh, 2000); }
+            onPress: function () { authorize().then(() => { if (!stopped && r.active) refresh(); }); schedule(refresh, 2000); }
         })));
         if (authorized) {
             children.push(h(View, { key: "logoutwrap", style: { paddingHorizontal: 12, marginBottom: 8 } }, h(Button, {
@@ -2086,8 +2084,7 @@ function SettingsComponent() {
             key: "paste",
             label: "Token fallback (only if authorize fails)",
             value: getToken() || "", secureTextEntry: true, autoCapitalize: "none",
-            onChange: function (v) { setToken(v); refresh(); },
-            onChangeText: function (v) { setToken(v); refresh(); }
+            onChange: function (v) { setToken(v); refresh(); }
         }));
     }
     var t = themeColors();

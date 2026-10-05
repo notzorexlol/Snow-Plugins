@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "test": "node --test tests/native.test.cjs"
+    "build": "node scripts/build.mjs && node IconThemer/build.mjs",
+    "test": "node --test tests/native.test.cjs IconThemer/test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

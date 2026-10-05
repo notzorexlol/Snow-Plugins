@@ -2,10 +2,10 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.installlinks",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "display": {
     "name": "InstallLinks",
-    "description": "Send and open snow:// install-plugin links.",
+    "description": "Share snow:// links and copy manifest URLs for manual installation.",
     "authors": [
       {
         "name": "Mime | N0_.q3",

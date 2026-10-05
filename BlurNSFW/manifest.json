@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.blurnsfw",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "display": {
     "name": "BlurNSFW",
     "description": "Tap-to-reveal sensitive media on supported mobile components.",

@@ -62,8 +62,11 @@ test('custom, pack and per-icon color priorities; failed downloads fall back; re
 test('documented JSX hooks handle memo/forwardRef native images without patching them', async () => {
     const { RN, plugin, r, store, icon, hooks } = harness();
     const originalType = RN.Image.type, originalRender = originalType.render;
+    const originalCreateElement = React.createElement;
     store.pack = 'solar'; store.colors.SettingsIcon = '#123456'; plugin.start();
-    assert.equal(hooks.size,331);
+    const namedIcons = JSON.parse(readFileSync(new URL('./src/sdk-icons.json', import.meta.url)));
+    assert.deepEqual(new Set(hooks.keys()), new Set(namedIcons));
+    assert.equal(React.createElement, originalCreateElement);
     let renderer;
     Renderer.act(() => { renderer = Renderer.create(icon({ color: '#ff0000', size: 32, style: { opacity: 0.6 }, accessibilityLabel: 'Settings' })); });
     let native = renderer.root.findByType('NativeImage');

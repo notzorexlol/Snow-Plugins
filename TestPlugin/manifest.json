@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.testplugin",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "display": {
     "name": "TestPlugin",
     "description": "Native Snow compatibility checks, sibling files, popups and isolated WebView CSS.",

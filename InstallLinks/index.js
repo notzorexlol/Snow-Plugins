@@ -36,8 +36,10 @@ var plugin = (() => {
     const openSheets = /* @__PURE__ */ new Map();
     const control = new AbortController();
     let active = true;
-    const store = B.plugin?.createStorage ? B.plugin.createStorage(defaults) : { ...defaults };
-    for (const [key, value] of Object.entries(defaults)) if (store[key] === void 0) store[key] = value;
+    const initial = JSON.parse(JSON.stringify(defaults));
+    const store = B.plugin?.createStorage ? B.plugin.createStorage(initial) : initial;
+    for (const [key, value] of Object.entries(initial)) if (store[key] === void 0) store[key] = value;
+    const alerts = /* @__PURE__ */ new Set();
     const r = {
       B,
       meta,
@@ -66,7 +68,18 @@ var plugin = (() => {
           },
           flush: () => B.plugin?.flushStorage?.() || Promise.resolve()
         },
-        ui: B.ui
+        ui: {
+          ...B.ui,
+          openAlert(id, element) {
+            if (!r.active) return;
+            alerts.add(id);
+            return B.ui.openAlert(id, element);
+          },
+          dismissAlert(id) {
+            alerts.delete(id);
+            return B.ui.dismissAlert(id);
+          }
+        }
       },
       own(fn) {
         if (typeof fn === "function") cleanups.push(fn);
@@ -76,8 +89,10 @@ var plugin = (() => {
         for (const fn of listeners) fn();
       },
       useRefresh() {
+        B.plugin?.useProxy?.(store);
         const [, bump] = React.useState(0);
         React.useEffect(() => {
+          if (!r.active) return;
           const fn = () => bump((n) => n + 1);
           listeners.add(fn);
           return () => listeners.delete(fn);
@@ -85,6 +100,7 @@ var plugin = (() => {
         return () => r.changed();
       },
       set(key, value) {
+        if (!r.active) return;
         store[key] = value;
         r.changed();
         Promise.resolve(B.plugin?.flushStorage?.()).catch((e) => r.error("Save settings", e));
@@ -158,39 +174,8 @@ var plugin = (() => {
         const selected = r.byStore("SelectedChannelStore");
         return selected?.getChannelId?.() || selected?.getCurrentlySelectedChannelId?.() || selected?.getLastSelectedChannelId?.() || null;
       },
-      async send(channelId, content) {
-        if (!channelId || content == null || content === "") return false;
-        const text = String(content);
-        try {
-          await r.discord(`/channels/${channelId}/messages`, { method: "POST", body: JSON.stringify({ content: text }) });
-          return true;
-        } catch (error) {
-          r.status.lastSendError = error?.message || String(error);
-        }
-        const util = r.find("sendMessage", "receiveMessage") || r.find("sendMessage", "sendBotMessage") || r.find("sendMessage");
-        const snowflake = r.find("fromTimestamp");
-        const nonce = typeof snowflake?.fromTimestamp === "function" ? String(snowflake.fromTimestamp(Date.now())) : String(Date.now());
-        const body = { content: text, tts: false, nonce, invalidEmojis: [], validNonShortcutEmojis: [] };
-        if (typeof util?.sendMessage === "function") {
-          try {
-            util.sendMessage(channelId, body);
-            return true;
-          } catch {
-          }
-          try {
-            util.sendMessage(channelId, body, true);
-            return true;
-          } catch {
-          }
-          try {
-            util.sendMessage(channelId, text);
-            return true;
-          } catch {
-          }
-        }
-        return false;
-      },
       local(channelId, content) {
+        if (!r.active) return false;
         const util = r.find("sendBotMessage");
         if (typeof util?.sendBotMessage === "function") {
           try {
@@ -205,50 +190,41 @@ var plugin = (() => {
       command(command) {
         const register2 = r.api.commands?.registerCommand;
         if (typeof register2 !== "function") throw new Error(`${meta.name}: commands.registerCommand unavailable`);
-        if (!r._commands) r._commands = [];
-        if (r._nextCommandId == null) r._nextCommandId = -91e4 - Math.abs(hashId(meta.id)) % 9e3;
         const name = command.name;
         const execute = command.execute;
         const prepared = {
           ...command,
           name,
-          displayName: command.displayName || name,
-          displayDescription: command.displayDescription || command.description,
-          untranslatedName: command.untranslatedName || name,
-          untranslatedDescription: command.untranslatedDescription || command.description,
-          applicationId: "-1",
-          type: command.type ?? 1,
-          inputType: 0,
-          options: (command.options || []).map((opt) => ({
-            ...opt,
-            displayName: opt.displayName || opt.name,
-            displayDescription: opt.displayDescription || opt.description || opt.name
-          })),
+          options: (command.options || []).map((opt) => ({ ...opt })),
           async execute(args, ctx) {
             if (!r.active) return;
             try {
               const result = await execute(args, ctx);
               if (!r.active) return;
-              if (result && typeof result === "object" && typeof result.content === "string") {
-                const cid = r.channelId(ctx) || r.channelId(args);
-                if (cid && await r.send(cid, result.content)) return;
-              }
               return result;
             } catch (error) {
               if (r.active) r.error(`/${name}`, error);
             }
           }
         };
-        const remove = register2(prepared);
-        prepared.id = String(r._nextCommandId--);
-        r._commands.push(prepared);
-        patchCommandList(r);
-        return r.own(() => {
-          try {
-            remove?.();
-          } catch {
-          }
-          r._commands = r._commands.filter((item) => item !== prepared);
+        return r.own(register2(prepared));
+      },
+      wait(ms) {
+        if (!r.active) return Promise.reject(new Error("Plugin stopped"));
+        return new Promise((resolve, reject) => {
+          const finish = () => {
+            clearTimeout(timer);
+            control.signal.removeEventListener("abort", abort);
+          };
+          const abort = () => {
+            finish();
+            reject(new Error("Plugin stopped"));
+          };
+          const timer = setTimeout(() => {
+            finish();
+            resolve();
+          }, ms);
+          control.signal.addEventListener("abort", abort, { once: true });
         });
       },
       async request(url, options = {}, timeout = 15e3, maxBytes = Infinity) {
@@ -297,9 +273,24 @@ var plugin = (() => {
       },
       async discord(path, options = {}) {
         if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid Discord API path");
-        const token = r.find("getToken")?.getToken();
-        if (!token) throw new Error("Discord session unavailable");
-        return r.request("https://discord.com/api/v9" + path, { ...options, headers: { "Content-Type": "application/json", ...options.headers, Authorization: token } });
+        if (!r.active) throw new Error("Plugin stopped");
+        const found = r.find("HTTP", "get", "post", "put", "patch", "del") || r.find("get", "post", "put", "del");
+        const client = found?.HTTP || found;
+        const method = (options.method || "GET").toLowerCase().replace(/^delete$/, "del");
+        if (typeof client?.[method] !== "function") throw new Error("Discord HTTP client unavailable");
+        try {
+          const response = await client[method]({ url: path, ...options.body != null ? { body: typeof options.body === "string" ? JSON.parse(options.body) : options.body } : {} });
+          if (!r.active) throw new Error("Plugin stopped");
+          if (response?.status >= 400) throw Object.assign(new Error(response.body?.message || `HTTP ${response.status}`), { status: response.status, body: response.body });
+          return { response, json() {
+            return response?.body ?? null;
+          } };
+        } catch (cause) {
+          const error = new Error(cause?.body?.message || cause?.message || "Discord request failed");
+          error.status = cause?.status;
+          error.retryAfter = Number(cause?.body?.retry_after) || 0;
+          throw error;
+        }
       },
       hook(names, transform) {
         const set = new Set(names);
@@ -367,7 +358,8 @@ var plugin = (() => {
         }
         openSheets.clear();
       },
-      open(key, Component, props = {}) {
+      open(key, Component, props = {}, options = {}) {
+        if (!r.active) throw new Error("Plugin stopped");
         const sheets = B.ui?.sheets;
         const ActionSheet = D.ActionSheet || C.ActionSheet;
         if (!sheets?.showSheet || !sheets?.hideSheet || !ActionSheet) throw new Error("Snow bottom-sheet components unavailable");
@@ -399,7 +391,7 @@ var plugin = (() => {
             if (openSheets.get(id) === close) openSheets.delete(id);
             closed = true;
           }, []);
-          return r.h(ActionSheet, { scrollable: true }, r.h(Boundary, null, r.h(Component, { ...props, close })));
+          return r.h(ActionSheet, { scrollable: options.scrollable ?? true }, r.h(Boundary, null, r.h(Component, { ...props, close })));
         }
         openSheets.set(id, close);
         try {
@@ -411,6 +403,7 @@ var plugin = (() => {
         return close;
       },
       copy(text) {
+        if (!r.active) return;
         const clip = r.common.clipboard || r.find("setString");
         if (!clip?.setString) throw new Error("Clipboard unavailable");
         clip.setString(String(text));
@@ -419,6 +412,14 @@ var plugin = (() => {
       dispose() {
         active = false;
         control.abort();
+        for (const id of alerts) {
+          try {
+            B.ui?.dismissAlert?.(id);
+          } catch (e) {
+            console.error(`[${meta.name}] alert cleanup`, e?.message);
+          }
+        }
+        alerts.clear();
         for (const abort of requests) abort();
         requests.clear();
         for (const close of [...openSheets.values()]) {
@@ -435,44 +436,12 @@ var plugin = (() => {
             console.error(`[${meta.name}] cleanup`, e?.message);
           }
         }
+        r.changed();
         listeners.clear();
         return r.api.storage.flush();
       }
     };
     return r;
-  }
-  function hashId(value) {
-    let hash = 0;
-    for (const char of String(value || "")) hash = hash * 31 + char.charCodeAt(0) | 0;
-    return hash;
-  }
-  function patchCommandList(r) {
-    if (r._commandListPatched) return;
-    const module = r.find("getBuiltInCommands");
-    if (typeof module?.getBuiltInCommands !== "function") return;
-    r._commandListPatched = true;
-    r.patch("after", module, "getBuiltInCommands", (_args, result) => {
-      const list = Array.isArray(result) ? result : [];
-      const byName = Object.fromEntries((r._commands || []).map((command) => [command.name, command]));
-      if (!Object.keys(byName).length) return;
-      const seen = {};
-      const out = [];
-      for (const command of list) {
-        const name = command?.name || command?.untranslatedName;
-        if (name && byName[name]) {
-          if (seen[name]) continue;
-          seen[name] = true;
-          out.push(byName[name]);
-        } else out.push(command);
-      }
-      for (const command of r._commands || []) {
-        if (!seen[command.name]) {
-          out.push(command);
-          seen[command.name] = true;
-        }
-      }
-      return out;
-    });
   }
   function ui(r) {
     const { h, C, D, RN, store } = r;
@@ -482,7 +451,7 @@ var plugin = (() => {
       return h(RN.Text, props, children);
     }
     function Button({ text, onPress, disabled, variant = "primary", ...props }) {
-      const Comp = D.Button || C.Button;
+      const Comp = D.Button;
       if (Comp) return h(Comp, { text, onPress, disabled, variant, size: "md", ...props });
       return h(RN.Pressable || RN.TouchableOpacity, { onPress, disabled, accessibilityRole: "button", style: { padding: 12 } }, h(Text, null, text));
     }
@@ -716,174 +685,6 @@ var plugin = (() => {
       if (value && typeof value === "object" && value !== node.content) rewriteNode(value);
     }
   }
-  function isStubFn(fn) {
-    if (typeof fn !== "function") return true;
-    try {
-      const src = Function.prototype.toString.call(fn);
-      if (/Compatibility API|unavailable in Snow|native\.previewExternalPlugin/i.test(src)) return true;
-    } catch {
-    }
-    return false;
-  }
-  function isUnavailableError(error) {
-    return /Compatibility API|unavailable in Snow/i.test(error?.message || String(error));
-  }
-  function liveFn(bag, name) {
-    return bag && typeof bag[name] === "function" && !isStubFn(bag[name]) ? bag[name].bind(bag) : null;
-  }
-  function candidateModules(r) {
-    const B = r.B || {};
-    const snow = typeof globalThis !== "undefined" && globalThis.snow || r.host || {};
-    const skip = new Set([B.native, B.api?.native, snow.native, snow.api?.native].filter(Boolean));
-    const out = [];
-    const add = (value) => {
-      if (!value || typeof value !== "object" || skip.has(value) || out.includes(value)) return;
-      out.push(value);
-    };
-    add(B.plugins);
-    add(B.managers?.plugins);
-    add(B.pluginManager);
-    add(B.api?.plugins);
-    add(snow.plugins);
-    add(snow.api?.plugins);
-    add(snow.runtime);
-    add(snow.runtime?.plugins);
-    if (liveFn(snow.api, "previewExternalPlugin")) add(snow.api);
-    if (liveFn(B.api, "previewExternalPlugin")) add(B.api);
-    const metro = r.metro || {};
-    for (const finder of ["findByPropsAll", "findAll"]) {
-      if (typeof metro[finder] !== "function") continue;
-      try {
-        const matches = finder === "findAll" ? metro.findAll((mod) => liveFn(mod, "previewExternalPlugin") && liveFn(mod, "installExternalPluginCandidate")) : metro.findByPropsAll("previewExternalPlugin", "installExternalPluginCandidate", "enableExternalPlugin") || metro.findByPropsAll("previewExternalPlugin", "installExternalPluginCandidate") || metro.findByPropsAll("previewExternalPlugin");
-        if (Array.isArray(matches)) matches.forEach(add);
-      } catch {
-      }
-    }
-    add(r.find("previewExternalPlugin", "installExternalPluginCandidate", "enableExternalPlugin"));
-    add(r.find("previewExternalPlugin", "installExternalPluginCandidate"));
-    add(r.find("promptExternalPluginInstall"));
-    add(r.find("openExternalPluginInstall"));
-    add(r.find("showExternalPluginInstall"));
-    add(r.find("openInstallFromURL"));
-    add(r.find("installFromURL", "previewExternalPlugin"));
-    return out.filter((mod) => !isStubFn(mod.previewExternalPlugin || (() => {
-    })) || liveFn(mod, "promptExternalPluginInstall") || liveFn(mod, "openExternalPluginInstall") || liveFn(mod, "showExternalPluginInstall"));
-  }
-  function findSnowInstallApi(r) {
-    const names = ["previewExternalPlugin", "installExternalPluginCandidate", "enableExternalPlugin"];
-    for (const bag of candidateModules(r)) {
-      if (names.every((name) => liveFn(bag, name))) {
-        const api2 = { module: bag };
-        for (const name of names) api2[name] = liveFn(bag, name);
-        return api2;
-      }
-    }
-    const api = { module: null };
-    for (const bag of candidateModules(r)) {
-      for (const name of names) {
-        if (!api[name] && liveFn(bag, name)) {
-          api[name] = liveFn(bag, name);
-          api.module = api.module || bag;
-        }
-      }
-    }
-    if (names.some((name) => typeof api[name] !== "function")) return null;
-    return api;
-  }
-  function installerUiFns(module) {
-    if (!module) return [];
-    const preferred = [
-      "promptExternalPluginInstall",
-      "promptInstallExternalPlugin",
-      "openExternalPluginInstall",
-      "openExternalPluginInstaller",
-      "showExternalPluginInstall",
-      "showInstallExternalPlugin",
-      "presentExternalPluginInstall",
-      "beginExternalPluginInstall",
-      "startExternalPluginInstall",
-      "reviewExternalPlugin",
-      "confirmExternalPluginInstall",
-      "installExternalPluginFromUrl",
-      "installExternalPluginFromURL",
-      "openInstallFromUrl",
-      "openInstallFromURL",
-      "installFromUrl",
-      "installFromURL"
-    ];
-    const found = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const key of preferred) {
-      const fn = liveFn(module, key);
-      if (fn) {
-        found.push({ key, fn });
-        seen.add(key);
-      }
-    }
-    for (const key of Object.keys(module)) {
-      if (seen.has(key) || !liveFn(module, key)) continue;
-      if (/^(prompt|open|show|present|confirm|begin|start|review)/i.test(key) && /install|externalPlugin|pluginInstall/i.test(key)) {
-        found.push({ key, fn: liveFn(module, key) });
-      }
-    }
-    return found;
-  }
-  async function openOfficialInstall(r, manifest) {
-    const url = manifestUrl(manifest);
-    const api = findSnowInstallApi(r);
-    const modules = [api?.module, ...candidateModules(r)].filter(Boolean);
-    const callers = [];
-    for (const module of modules) {
-      for (const item of installerUiFns(module)) {
-        if (!callers.some((existing) => existing.fn === item.fn)) callers.push(item);
-      }
-    }
-    for (const { key, fn } of callers) {
-      try {
-        await fn(url);
-        return { via: key };
-      } catch (error) {
-        if (isUnavailableError(error)) continue;
-        throw error;
-      }
-    }
-    const Comp = r.byName("ExternalPluginInstallModal") || r.byName("InstallExternalPluginModal") || r.byName("PluginInstallConfirmation") || r.byName("InstallPluginAlert") || r.byName("ExternalPluginPreview");
-    if (Comp && r.api.ui?.openAlert) {
-      r.api.ui.openAlert("install-external-plugin", r.h(Comp, { url, manifestUrl: url, sourceUrl: url }));
-      return { via: "openAlert" };
-    }
-    if (!api) throw new Error("Snow installer was not found. Compatibility native.previewExternalPlugin is a stub and cannot install plugins.");
-    const candidate = await api.previewExternalPlugin(url);
-    for (const { key, fn } of installerUiFns(api.module)) {
-      try {
-        await fn(candidate);
-        return { via: key, candidate };
-      } catch (error) {
-        if (isUnavailableError(error)) continue;
-        throw error;
-      }
-    }
-    return { via: "previewExternalPlugin", candidate, needsConfirm: true };
-  }
-  async function installExternalPlugin(r, manifest, candidate) {
-    const api = findSnowInstallApi(r);
-    if (!api) throw new Error("Snow installer was not found. Compatibility native.previewExternalPlugin is a stub and cannot install plugins.");
-    const url = manifestUrl(manifest);
-    const preview = candidate || await api.previewExternalPlugin(url);
-    const installed = await api.installExternalPluginCandidate(preview);
-    const runtimeId = installed?.runtimeId ?? installed?.id ?? preview?.runtimeId;
-    if (runtimeId == null) throw new Error("Install succeeded but no runtimeId was returned");
-    await api.enableExternalPlugin(runtimeId);
-    return { preview, installed, runtimeId };
-  }
-  function candidateLabel(candidate) {
-    if (!candidate || typeof candidate !== "object") return "";
-    const display = candidate.display || candidate.manifest?.display || candidate.manifest || candidate;
-    const name = display.name || candidate.name || candidate.id || "";
-    const version = display.version || candidate.version || candidate.manifest?.version || "";
-    const description = display.description || candidate.description || "";
-    return [name && version ? `${name} ${version}` : name, description].filter(Boolean).join("\n");
-  }
   function expandUrlRegex(value) {
     if (!(value instanceof RegExp) || !/https\?:/.test(value.source) || /snow\?:/.test(value.source)) return value;
     return new RegExp(value.source.replace(/https\?:/g, "(?:https?|snow):"), value.flags);
@@ -908,6 +709,9 @@ var plugin = (() => {
         if (expanded !== current) {
           try {
             module[key] = expanded;
+            r.own(() => {
+              if (module[key] === expanded) module[key] = current;
+            });
           } catch {
           }
         }
@@ -917,44 +721,21 @@ var plugin = (() => {
   function InstallLinks(r) {
     const { h, React } = r, { Page, Text, Button, Input } = ui(r);
     let close;
-    function Prompt({ link, info, candidate, close: dismiss }) {
-      const [busy, setBusy] = React.useState(false);
-      const [status, setStatus] = React.useState(info || "");
-      async function install2() {
-        if (busy) return;
-        setBusy(true);
-        try {
-          const result = await installExternalPlugin(r, link.url, candidate);
-          r.toast("Installed and enabled " + (result.runtimeId || "plugin"));
-          setStatus("Installed and enabled as " + result.runtimeId + ".");
-        } catch (error) {
-          r.copy(snowInstallLink(link.url));
-          setStatus((error?.message || String(error)) + "\nCopied the snow:// install link.");
-        } finally {
-          setBusy(false);
-        }
-      }
+    function Prompt({ link, close: dismiss }) {
       return h(
         Page,
-        { title: "Install Snow plugin", close: dismiss },
-        h(Text, { selectable: true }, snowInstallLink(link.url)),
-        h(Text, { muted: true }, status || "Review this plugin, then install."),
-        h(Button, { text: busy ? "Working\u2026" : "Install", disabled: busy, onPress: install2 }),
+        { title: "Install in Snow", close: dismiss },
+        h(Text, { selectable: true }, link.url),
+        h(Text, null, "Copy the manifest URL, then open Snow Settings \u2192 Plugins \u2192 Install from URL. Review the plugin there, install it, and enable it."),
+        h(Text, { muted: true }, "Snow does not expose plugin installation or enabling other plugins through its compatibility SDK."),
+        h(Button, { text: "Copy manifest URL", onPress: () => r.copy(link.url) }),
         h(Button, { text: "Copy snow:// link", variant: "secondary", onPress: () => r.copy(snowInstallLink(link.url)) })
       );
     }
     async function openPrompt(link) {
-      const url = manifestUrl(link.url);
-      const resolved = { ...link, url };
-      try {
-        const result = await openOfficialInstall(r, url);
-        if (!result.needsConfirm) return;
-        close?.();
-        close = r.open("install", Prompt, { link: resolved, info: candidateLabel(result.candidate), candidate: result.candidate });
-      } catch (error) {
-        r.copy(url);
-        r.toast(error?.message || String(error));
-      }
+      if (!r.active) return;
+      close?.();
+      close = r.open("install", Prompt, { link: { ...link, url: manifestUrl(link.url) } });
     }
     function handle(url) {
       const link = parseInstallLink(url);
@@ -1029,7 +810,7 @@ var plugin = (() => {
         });
         r.command({
           name: "installplugin",
-          description: "Review and install a plugin from a snow:// or https URL",
+          description: "Open installation instructions for a snow:// or https URL",
           options: [{ name: "url", description: "snow:// or https plugin URL", type: 3, required: true }],
           execute(args) {
             const raw = String(args.find((a) => a.name === "url")?.value || "");
@@ -1051,6 +832,6 @@ var plugin = (() => {
   InstallLinks.defaults = {};
 
   // InstallLinks.entry.js
-  var InstallLinks_entry_default = register({ "id": "mime.installlinks", "name": "InstallLinks", "description": "Send and open snow:// install-plugin links.", "version": "1.0.6", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/InstallLinks" }, InstallLinks);
+  var InstallLinks_entry_default = register({ "id": "mime.installlinks", "name": "InstallLinks", "description": "Share snow:// links and copy manifest URLs for manual installation.", "version": "1.0.7", "authors": [{ "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/InstallLinks" }, InstallLinks);
   return __toCommonJS(InstallLinks_entry_exports);
 })();

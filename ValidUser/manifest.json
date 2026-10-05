@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.validuser",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "display": {
     "name": "ValidUser",
     "description": "Automatically resolve unknown mentions and replace @Unknown User.",
