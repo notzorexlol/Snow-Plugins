@@ -33,6 +33,64 @@ var SETTINGS_META = {
     }
 };
 
+var HCAPTCHA_HEADERS: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Origin": "https://discord.com",
+    "Referer": "https://discord.com/"
+};
+
+interface CaptchaChallenge {
+    service: string;
+    sitekey: string | null;
+}
+
+function captchaErrorInfo(error: any): CaptchaChallenge | null {
+    var body = error && error.body ? error.body : {};
+    if (body.captcha_required || body.captcha_service || body.captcha_sitekey) {
+        return {
+            service: body.captcha_service || "hcaptcha",
+            sitekey: body.captcha_sitekey || body.captcha_site_key || null
+        };
+    }
+    return null;
+}
+
+async function oneClickSolve(sitekey: string): Promise<string> {
+    var probe = await fetch("https://hcaptcha.com/checksiteconfig?v=1&r=null&host=discord.com&sc=1&swa=1", { headers: HCAPTCHA_HEADERS });
+    var config = await probe.json();
+    if (!config || config.pass !== true) throw new Error("hCaptcha served a full challenge; one-click unavailable");
+    var now = Date.now();
+    var form = new URLSearchParams({
+        v: "1",
+        r: "null",
+        host: "discord.com",
+        sitekey: sitekey,
+        hl: "en",
+        motionData: JSON.stringify({
+            st: now, dct: now,
+            mm: [[now, 0, 0]],
+            md: [[now, 0, 0]],
+            mj: [[now, 0]],
+            fst: now, ft: now,
+            did: 0, v: 1
+        })
+    });
+    if (config.c && config.c.req) form.set("n", config.c.req);
+    var res = await fetch("https://hcaptcha.com/getcaptcha/" + encodeURIComponent(sitekey), {
+        method: "POST",
+        headers: HCAPTCHA_HEADERS,
+        body: form.toString()
+    });
+    var data = await res.json();
+    var token = (data && (data.generated_pass_UUID || (data.pass && data.pass.generated_pass_UUID))) || null;
+    if (!token) {
+        var why = data && data.error_code === "challenge" ? "full challenge served" : "unexpected getcaptcha response (" + ((data && data.error_code) || "no token") + ")";
+        throw new Error("One-click captcha failed: " + why);
+    }
+    return token;
+}
+
 function getMod() {
     if (B && (B.metro || B.patcher || B.ui || B.api || B.plugin || B.flux)) return B;
     var list = [];
@@ -313,20 +371,25 @@ function redeemViaActions(request, onOk, onErr) {
     return false;
 }
 
-async function redeemViaApi(request) {
+async function postRedeem(request, captchaKey) {
     var token = getToken();
     if (!token) throw new Error("No auth token");
+    var body = captchaKey
+        ? { channel_id: request.channelId || null, captcha_key: captchaKey }
+        : { channel_id: request.channelId || null };
     var res = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + encodeURIComponent(request.code) + "/redeem", {
         method: "POST",
         headers: {
             Authorization: token,
             "Content-Type": "application/json"
         },
-        body: JSON.stringify({ channel_id: request.channelId || null })
+        body: JSON.stringify(body)
     });
     var text = await res.text();
     if (res.status < 200 || res.status >= 300) {
-        throw new Error("redeem " + res.status + (text ? ": " + text : ""));
+        var err = new Error("redeem " + res.status + (text ? ": " + text : ""));
+        try { err.body = JSON.parse(text); } catch (_e) { err.body = {}; }
+        throw err;
     }
 }
 
@@ -353,6 +416,29 @@ function handleClaimFailure(request, error, giftType) {
     continueQueue();
 }
 
+function solveAndRetry(request, giftType, captchaError) {
+    var info = captchaErrorInfo(captchaError);
+    var resolveSitekey = info && info.sitekey
+        ? Promise.resolve(info.sitekey)
+        : postRedeem(request, null).then(function () {
+            throw new Error("captcha solved itself on retry probe");
+        }, function (probeError) {
+            var probeInfo = captchaErrorInfo(probeError);
+            if (!probeInfo || !probeInfo.sitekey) throw new Error("captcha sitekey unavailable");
+            return probeInfo.sitekey;
+        });
+    resolveSitekey.then(function (sitekey) {
+        log("captcha required for", request.code, "- attempting one-click solve");
+        return oneClickSolve(sitekey);
+    }).then(function (token) {
+        return postRedeem(request, token);
+    }).then(function () {
+        handleClaimSuccess(request, giftType);
+    }).catch(function (error) {
+        handleClaimFailure(request, toError(error), giftType);
+    });
+}
+
 function processQueue() {
     if (claiming) return;
     var request = claimQueue.shift();
@@ -365,14 +451,20 @@ function processQueue() {
     var usedActions = redeemViaActions(
         request,
         function () { handleClaimSuccess(request, giftType); },
-        function (error) { handleClaimFailure(request, toError(error), giftType); }
+        function (error) {
+            var cap = captchaErrorInfo(error);
+            if (cap) solveAndRetry(request, giftType, error);
+            else handleClaimFailure(request, toError(error), giftType);
+        }
     );
     if (usedActions) return;
 
-    redeemViaApi(request).then(function () {
+    postRedeem(request, null).then(function () {
         handleClaimSuccess(request, giftType);
     }).catch(function (error) {
-        handleClaimFailure(request, toError(error), giftType);
+        var cap = captchaErrorInfo(error);
+        if (cap) solveAndRetry(request, giftType, error);
+        else handleClaimFailure(request, toError(error), giftType);
     });
 }
 

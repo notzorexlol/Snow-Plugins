@@ -526,6 +526,58 @@ var plugin = (() => {
     });
   }
 
+  // project:src/plugins/captcha.js
+  var HCAPTCHA_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Origin": "https://discord.com",
+    "Referer": "https://discord.com/"
+  };
+  function captchaErrorInfo(e) {
+    const body = e?.body || {};
+    if (body.captcha_required || body.captcha_service || body.captcha_sitekey) {
+      return {
+        service: body.captcha_service || "hcaptcha",
+        sitekey: body.captcha_sitekey || body.captcha_site_key || null
+      };
+    }
+    return null;
+  }
+  async function oneClickSolve(r, sitekey) {
+    const probe = await r.request("https://hcaptcha.com/checksiteconfig?v=1&r=null&host=discord.com&sc=1&swa=1", { headers: HCAPTCHA_HEADERS });
+    const config = probe.json();
+    if (config?.pass !== true) throw new Error("hCaptcha served a full challenge; one-click unavailable");
+    const now = Date.now();
+    const form = new URLSearchParams({
+      v: "1",
+      r: "null",
+      host: "discord.com",
+      sitekey,
+      hl: "en",
+      "motionData": JSON.stringify({
+        st: now, dct: now,
+        mm: [[now, 0, 0]],
+        md: [[now, 0, 0]],
+        mj: [[now, 0]],
+        fst: now, ft: now,
+        did: 0, v: 1
+      })
+    });
+    if (config?.c?.req) form.set("n", config.c.req);
+    const res = await r.request(`https://hcaptcha.com/getcaptcha/${sitekey}`, {
+      method: "POST",
+      headers: HCAPTCHA_HEADERS,
+      body: form.toString()
+    });
+    const data = res.json();
+    const token = data?.generated_pass_UUID || data?.pass?.generated_pass_UUID;
+    if (!token) {
+      const why = data?.error_code === "challenge" ? "full challenge served" : `unexpected getcaptcha response (${data?.error_code || "no token"})`;
+      throw new Error(`One-click captcha failed: ${why}`);
+    }
+    return token;
+  }
+
   // project:src/plugins/nitro-sniper.js
   function giftCodes(text) {
     return [...new Set(Array.from(String(text || "").matchAll(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gift\/|discord(?:app)?\.com\/gifts\/)([A-Za-z0-9]{16,24})(?![A-Za-z0-9])/g), (m) => m[1]))];
@@ -560,11 +612,20 @@ var plugin = (() => {
           let success = false, result = "", giftType;
           r.toast("Claiming gift\u2026", "GiftIcon");
           try {
+            let captchaKey;
             for (let attempt = 0; ; attempt++) {
               try {
-                await r.discord(`/entitlements/gift-codes/${item.code}/redeem`, { method: "POST", body: JSON.stringify({ channel_id: item.channelId || null }) });
+                const options = { method: "POST", body: JSON.stringify(captchaKey ? { channel_id: item.channelId || null, captcha_key: captchaKey } : { channel_id: item.channelId || null }) };
+                await r.discord(`/entitlements/gift-codes/${item.code}/redeem`, { ...options });
                 break;
               } catch (e) {
+                const cap = !captchaKey && captchaErrorInfo(e);
+                if (cap && cap.sitekey && cap.service === "hcaptcha") {
+                  r.toast("Solving captcha\u2026", "ShieldIcon");
+                  captchaKey = await oneClickSolve(r, cap.sitekey);
+                  attempt--; // don't consume attempts on the captcha round-trip
+                  continue;
+                }
                 if (e.status !== 429 || attempt >= 2 || e.retryAfter <= 0 || e.retryAfter > 120) throw e;
                 stats.lastResult = `Rate limited; retrying in ${Math.ceil(e.retryAfter)}s`;
                 r.changed();
@@ -669,6 +730,6 @@ var plugin = (() => {
   NitroSniper.defaults = { ignoreOwnGiftLinks: false, webhookUrl: "" };
 
   // NitroSniper.entry.js
-  var NitroSniper_entry_default = register({ "id": "mime.nitrosniper", "name": "NitroSniper", "description": "Process new gift links with a deduplicated queue and visible results.", "version": "2.2.2", "authors": [{ "name": "neoarz", "id": "218675193592283137" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NitroSniper" }, NitroSniper);
+  var NitroSniper_entry_default = register({ "id": "mime.nitrosniper", "name": "NitroSniper", "description": "Process new gift links with a deduplicated queue and visible results.", "version": "2.3.0", "authors": [{ "name": "neoarz", "id": "218675193592283137" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NitroSniper" }, NitroSniper);
   return __toCommonJS(NitroSniper_entry_exports);
 })();
