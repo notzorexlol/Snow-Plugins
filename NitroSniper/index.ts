@@ -34,50 +34,61 @@ var SETTINGS_META = {
     }
 };
 
+// Captcha contract (verified live against discord.com, Oct 2026):
+//  - gate: 400 + body.captcha_key ("captcha-required") with captcha_sitekey,
+//    captcha_service, captcha_session_id, captcha_rqdata, captcha_rqtoken
+//  - resubmit via HEADERS: X-Captcha-Key, X-Captcha-Rqtoken (widget respKey),
+//    X-Captcha-Session-Id
+//  - token source: real hCaptcha widget in a WebView; data-callback delivers
+//    (token, rqtoken) — both forwarded
 interface CaptchaChallenge {
     service: string;
     sitekey: string | null;
+    sessionId: string | null;
     rqtoken: string | null;
+    rqdata: string | null;
 }
 
 function captchaErrorInfo(error: any): CaptchaChallenge | null {
     var body = error && error.body ? error.body : {};
-    if (body.captcha_required || body.captcha_service || body.captcha_sitekey) {
-        return {
-            service: body.captcha_service || "hcaptcha",
-            sitekey: body.captcha_sitekey || body.captcha_site_key || null,
-            rqtoken: body.captcha_rqtoken || body.captcha_rq_token || null
-        };
-    }
-    return null;
+    var gated = Object.prototype.toString.call(body.captcha_key) === "[object Array]"
+        ? body.captcha_key.length > 0
+        : !!body.captcha_key;
+    if (!gated) return null;
+    return {
+        service: body.captcha_service || "hcaptcha",
+        sitekey: body.captcha_sitekey || body.captcha_site_key || null,
+        sessionId: body.captcha_session_id || null,
+        rqtoken: body.captcha_rqtoken || null,
+        rqdata: body.captcha_rqdata || null
+    };
 }
 
 var CAPTCHA_HTML = [
     '<!DOCTYPE html><html><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    '<script src="https://js.hcaptcha.com/1/api.js?render=explicit" onload="window.__apiReady=true"><\/script>',
+    '<script src="https://js.hcaptcha.com/1/api.js?render=explicit"><\/script>',
     "</head><body>",
-    '<div id="box" style="position:fixed;left:-9999px;top:0;width:304px;height:78px"></div>',
-    '<script>',
+    '<div id="box" style="position:fixed;left:0;top:0;width:304px;height:78px;background:#fff;border-radius:4px;overflow:hidden"></div>',
+    "<script>",
     "function post(type, data) {",
     "  var payload = Object.assign({ type: type }, data || {});",
     "  try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (e) {}",
     "}",
-    "post('ready', { apiReady: !!window.__apiReady });",
-    "window.solveCaptcha = function (sk) {",
+    "window.solveCaptcha = function (cfg) {",
     "  try {",
     "    if (!window.hcaptcha) { post('error', { message: 'hcaptcha api not loaded' }); return; }",
     "    var id = hcaptcha.render('box', {",
-    "      sitekey: sk,",
-    "      size: 'invisible',",
-    "      callback: function (token) { post('token', { token: token }); },",
+    "      sitekey: cfg.sitekey,",
+    "      size: cfg.interactive ? 'normal' : 'invisible',",
+    "      callback: function (token) { try { post('token', { token: token, rqtoken: hcaptcha.getRespKey(id) || null }); } catch (e) { post('token', { token: token, rqtoken: null }); } },",
     "      'error-callback': function (err) { post('error', { message: String(err) }); },",
     "      'expired-callback': function () { post('error', { message: 'captcha expired' }); },",
     "      'chalexpired-callback': function () { post('error', { message: 'challenge expired' }); },",
-    "      'open-callback': function () { post('challenge_opened', {}); },",
     "      'close-callback': function () { post('challenge_closed', {}); }",
     "    });",
-    "    hcaptcha.execute(id);",
+    "    post('rendered', {});",
+    "    hcaptcha.execute(id, { async: true, rqdata: cfg.rqdata || undefined });",
     "  } catch (e) { post('error', { message: String(e && e.message || e) }); }",
     "};",
     "<\/script></body></html>"
@@ -86,12 +97,14 @@ var CAPTCHA_HTML = [
 function createCaptchaSolver(React: any) {
     var unpatches: Array<() => void> = [];
     var pending: {
-        resolve: (token: string) => void;
+        resolve: (solved: { token: string; rqtoken: string | null }) => void;
         reject: (err: Error) => void;
         sitekey: string;
+        rqdata: string | null;
         timer: any;
     } | null = null;
     var active = false;
+    var visibleChallenge = false;
 
     function setActive(v: boolean) {
         active = v;
@@ -108,8 +121,8 @@ function createCaptchaSolver(React: any) {
         active = false;
     }
 
-    function solve(sitekey: string): Promise<string> {
-        return new Promise<string>(function (resolve, reject) {
+    function solve(sitekey: string, rqdata: string | null): Promise<{ token: string; rqtoken: string | null }> {
+        return new Promise(function (resolve, reject) {
             if (!active) {
                 reject(new Error("captcha solver inactive"));
                 return;
@@ -117,13 +130,14 @@ function createCaptchaSolver(React: any) {
             if (pending) {
                 clearTimeout(pending.timer);
             }
-            pending = { resolve: resolve, reject: reject, sitekey: sitekey, timer: null };
+            visibleChallenge = false;
+            pending = { resolve: resolve, reject: reject, sitekey: sitekey, rqdata: rqdata, timer: null };
             pending.timer = setTimeout(function () {
                 if (pending && pending.resolve === resolve) {
                     pending = null;
-                    reject(new Error("captcha solve timed out (widget did not return a token in 60s)"));
+                    reject(new Error("captcha solve timed out (widget did not return a token in 90s)"));
                 }
-            }, 60000);
+            }, 90000);
         });
     }
 
@@ -135,17 +149,26 @@ function createCaptchaSolver(React: any) {
         if (msg.type === "token") {
             clearTimeout(current.timer);
             pending = null;
-            current.resolve(String(msg.token));
+            current.resolve({ token: String(msg.token), rqtoken: msg.rqtoken || null });
         } else if (msg.type === "error") {
+            if (!visibleChallenge) {
+                visibleChallenge = true; // restart as interactive challenge
+                return;
+            }
             clearTimeout(current.timer);
             pending = null;
             current.reject(new Error("captcha widget: " + (msg.message || "unknown error")));
+        } else if (msg.type === "challenge_closed" && visibleChallenge) {
+            clearTimeout(current.timer);
+            pending = null;
+            current.reject(new Error("captcha challenge closed without a token"));
         }
     }
 
     function element(): any {
         if (!pending || !active) return null;
         var sitekey = String(pending.sitekey || "");
+        var cfg = JSON.stringify({ sitekey: sitekey, rqdata: pending.rqdata || null, interactive: visibleChallenge });
         var WebViewMod: any = null;
         try { WebViewMod = findByProps("WebView"); } catch (_e) {}
         var WebView: any = (WebViewMod && WebViewMod.WebView) || (function () {
@@ -153,15 +176,15 @@ function createCaptchaSolver(React: any) {
         })() || null;
         if (!WebView) return null;
         return (getReact() as any).createElement(WebView, {
-            key: "captcha-" + sitekey.slice(-6),
+            key: "captcha-" + sitekey.slice(-6) + (visibleChallenge ? "-i" : "-v"),
             source: { html: CAPTCHA_HTML, baseUrl: "https://discord.com" },
             originWhitelist: ["*"],
             javaScriptEnabled: true,
             domStorageEnabled: true,
             injectedJavaScript: [
-                "window.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); });",
-                "document.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); });",
-                "if (window.solveCaptcha) { window.solveCaptcha(" + JSON.stringify(sitekey) + "); } else { setTimeout(function () { window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); }, 1500); }"
+                "window.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + cfg + "); });",
+                "document.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + cfg + "); });",
+                "if (window.solveCaptcha) { window.solveCaptcha(" + cfg + "); } else { setTimeout(function () { window.solveCaptcha && window.solveCaptcha(" + cfg + "); }, 1500); }"
             ].join("\n"),
             onMessage: function (event: any) { handleMessage(event && event.nativeEvent && event.nativeEvent.data); }
         });
@@ -457,21 +480,22 @@ function redeemViaActions(request, onOk, onErr) {
     return false;
 }
 
-async function postRedeem(request, captchaKey, rqtoken) {
+async function postRedeem(request, solved) {
     var token = getToken();
     if (!token) throw new Error("No auth token");
-    var body: Record<string, any> = { channel_id: request.channelId || null };
-    if (captchaKey) {
-        body.captcha_key = captchaKey;
-        if (rqtoken) body.captcha_rqtoken = rqtoken;
+    var headers: Record<string, string> = {
+        Authorization: token,
+        "Content-Type": "application/json"
+    };
+    if (solved) {
+        headers["X-Captcha-Key"] = solved.token;
+        if (solved.rqtoken) headers["X-Captcha-Rqtoken"] = solved.rqtoken;
+        if (solved.sessionId) headers["X-Captcha-Session-Id"] = solved.sessionId;
     }
     var res = await fetch("https://discord.com/api/v9/entitlements/gift-codes/" + encodeURIComponent(request.code) + "/redeem", {
         method: "POST",
-        headers: {
-            Authorization: token,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
+        headers: headers,
+        body: JSON.stringify({ channel_id: request.channelId || null })
     });
     var text = await res.text();
     if (res.status < 200 || res.status >= 300) {
@@ -506,15 +530,17 @@ function handleClaimFailure(request, error, giftType) {
 
 function solveAndRetry(request, giftType, captchaError) {
     var info = captchaErrorInfo(captchaError);
-    var sitekey = info && info.sitekey ? info.sitekey : null;
-    var rqtoken = info && info.rqtoken ? info.rqtoken : null;
-    if (!sitekey) {
+    if (!info || !info.sitekey) {
         handleClaimFailure(request, new Error("captcha sitekey unavailable"), giftType);
         return;
     }
     log("captcha required for", request.code, "- launching widget solve");
-    solver.solve(sitekey).then(function (widgetToken) {
-        return postRedeem(request, widgetToken, rqtoken);
+    solver.solve(info.sitekey, info.rqdata).then(function (solved) {
+        return postRedeem(request, {
+            token: solved.token,
+            rqtoken: solved.rqtoken || info.rqtoken,
+            sessionId: info.sessionId
+        });
     }).then(function () {
         handleClaimSuccess(request, giftType);
     }).catch(function (error) {
