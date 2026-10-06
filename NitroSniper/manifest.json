@@ -2,7 +2,7 @@
   "spec": 3,
   "type": "plugin",
   "id": "mime.nitrosniper",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "display": {
     "name": "NitroSniper",
     "description": "Process new gift links with a deduplicated queue and visible results.",
