@@ -526,6 +526,140 @@ var plugin = (() => {
     });
   }
 
+  // project:src/plugins/captcha.js
+  function captchaErrorInfo(e) {    const body = e?.body || {};
+    if (body.captcha_required || body.captcha_service || body.captcha_sitekey) {
+      return {
+        service: body.captcha_service || "hcaptcha",
+        sitekey: body.captcha_sitekey || body.captcha_site_key || null,
+        rqtoken: body.captcha_rqtoken || body.captcha_rq_token || null
+      };
+    }
+    return null;
+  }
+  var CAPTCHA_HTML = [
+    '<!DOCTYPE html><html><head><meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<script src="https://js.hcaptcha.com/1/api.js?render=explicit" onload="window.__apiReady=true"><\/script>',
+    "</head><body>",
+    '<div id="box" style="position:fixed;left:-9999px;top:0;width:304px;height:78px"></div>',
+    '<script>',
+    "var sitekey = null;",
+    "function post(type, data) {",
+    "  var payload = Object.assign({ type: type }, data || {});",
+    "  try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (e) {}",
+    "}",
+    "post('ready', { apiReady: !!window.__apiReady });",
+    "window.solveCaptcha = function (sk) {",
+    "  sitekey = sk;",
+    "  try {",
+    "    if (!window.hcaptcha) { post('error', { message: 'hcaptcha api not loaded' }); return; }",
+    "    var id = hcaptcha.render('box', {",
+    "      sitekey: sk,",
+    "      size: 'invisible',",
+    "      callback: function (token) { post('token', { token: token }); },",
+    "      'error-callback': function (err) { post('error', { message: String(err) }); },",
+    "      'expired-callback': function () { post('error', { message: 'captcha expired' }); },",
+    "      'chalexpired-callback': function () { post('error', { message: 'challenge expired' }); },",
+    "      'open-callback': function () { post('challenge_opened', {}); },",
+    "      'close-callback': function () { post('challenge_closed', {}); }",
+    "    });",
+    "    hcaptcha.execute(id);",
+    "  } catch (e) { post('error', { message: String(e && e.message || e) }); }",
+    "};",
+    "<\/script></body></html>"
+  ].join("");
+  function createCaptchaSolver(r, React) {
+    const WebView = r.find("WebView")?.WebView || r.byName("WebView");
+    let sheetClose = null;
+    function mountHost() {
+      if (sheetClose) return;
+      if (typeof r.ui?.sheets?.open !== "function") return;
+      try {
+        r.ui.sheets.open("nitrosniper-captcha", function CaptchaHost({ close }) {
+          React.useEffect(() => {
+            sheetClose = close;
+            return () => {
+              if (sheetClose === close) sheetClose = null;
+            };
+          }, [close]);
+          const el = element();
+          return el || null;
+        }, {}, { scrollable: false });
+      } catch {
+        sheetClose = null;
+      }
+    }
+    function unmountHost() {
+      if (!sheetClose) return;
+      const close = sheetClose;
+      sheetClose = null;
+      try { close(); } catch { }
+    }
+    let pending = null;
+    let requestId = 0;
+    function solve(sitekey) {
+      return new Promise((resolvePromise, rejectPromise) => {
+        if (!WebView) {
+          rejectPromise(new Error("WebView unavailable in this Snow build"));
+          return;
+        }
+        const id = ++requestId;
+        pending = { id, resolvePromise, rejectPromise, sitekey, opened: false };
+        mountHost();
+        r.changed();
+        setTimeout(() => {
+          if (pending && pending.id === id) {
+            const timeout = pending;
+            pending = null;
+            unmountHost();
+            timeout.rejectPromise(new Error("captcha solve timed out (widget did not return a token in 60s)"));
+            r.changed();
+          }
+        }, 6e4);
+      });
+    }
+    function handleMessage(data) {
+      let msg;
+      try { msg = JSON.parse(data); } catch { return; }
+      const current = pending;
+      if (!current) return;
+      if (msg.type === "token") {
+        pending = null;
+        unmountHost();
+        current.resolvePromise(String(msg.token));
+        r.changed();
+      } else if (msg.type === "error") {
+        pending = null;
+        unmountHost();
+        current.rejectPromise(new Error(`captcha widget: ${msg.message || "unknown error"}`));
+        r.changed();
+      } else if (msg.type === "challenge_opened") {
+        current.opened = true;
+        r.toast("hCaptcha needs one tap — finish the puzzle on screen", "ShieldIcon");
+        r.changed();
+      }
+    }
+    function element() {
+      if (!pending || !WebView) return null;
+      const sitekey = String(pending.sitekey || "");
+      return React.createElement(WebView, {
+        key: `captcha-${pending.id}`,
+        source: { html: CAPTCHA_HTML, baseUrl: "https://discord.com" },
+        originWhitelist: ["*"],
+        javaScriptEnabled: true,
+        domStorageEnabled: true,
+        injectedJavaScript: [
+          "window.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); });",
+          "document.addEventListener('message', function (e) { if (e.data === 'retry') window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); });",
+          "if (window.solveCaptcha) { window.solveCaptcha(" + JSON.stringify(sitekey) + "); } else { setTimeout(function () { window.solveCaptcha && window.solveCaptcha(" + JSON.stringify(sitekey) + "); }, 1500); }"
+        ].join("\n"),
+        onMessage: (event) => handleMessage(event?.nativeEvent?.data)
+      });
+    }
+    return { solve, element, isPending: () => !!pending };
+  }
+
   // project:src/plugins/nitro-sniper.js
   function giftCodes(text) {
     return [...new Set(Array.from(String(text || "").matchAll(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gift\/|discord(?:app)?\.com\/gifts\/)([A-Za-z0-9]{16,24})(?![A-Za-z0-9])/g), (m) => m[1]))];
@@ -538,6 +672,7 @@ var plugin = (() => {
   }
   function NitroSniper(r) {
     const { h, React } = r, { Page, Text, Button, Input, Toggle } = ui(r);
+    const solver = createCaptchaSolver(r, React);
     const seen = /* @__PURE__ */ new Map(), queue = [];
     let running = false, stopped = false, started = Date.now(), waitTimer, releaseWait;
     const stats = { queued: 0, claimed: 0, failed: 0, lastResult: "Waiting for new gift links" };
@@ -560,11 +695,28 @@ var plugin = (() => {
           let success = false, result = "", giftType;
           r.toast("Claiming gift\u2026", "GiftIcon");
           try {
+            let captchaKey, captchaRqtoken;
             for (let attempt = 0; ; attempt++) {
               try {
-                await r.discord(`/entitlements/gift-codes/${item.code}/redeem`, { method: "POST", body: JSON.stringify({ channel_id: item.channelId || null }) });
+                const payload = { channel_id: item.channelId || null };
+                if (captchaKey) {
+                  payload.captcha_key = captchaKey;
+                  if (captchaRqtoken) payload.captcha_rqtoken = captchaRqtoken;
+                }
+                await r.discord(`/entitlements/gift-codes/${item.code}/redeem`, { method: "POST", body: JSON.stringify(payload) });
                 break;
               } catch (e) {
+                const cap = !captchaKey && captchaErrorInfo(e);
+                if (cap && cap.sitekey && cap.service === "hcaptcha") {
+                  r.toast("Solving captcha\u2026", "ShieldIcon");
+                  stats.lastResult = "Solving hCaptcha\u2026";
+                  r.changed();
+                  const token = await solver.solve(cap.sitekey);
+                  captchaKey = token;
+                  captchaRqtoken = cap.rqtoken;
+                  attempt--; // don't consume attempts on the captcha round-trip
+                  continue;
+                }
                 if (e.status !== 429 || attempt >= 2 || e.retryAfter <= 0 || e.retryAfter > 120) throw e;
                 stats.lastResult = `Rate limited; retrying in ${Math.ceil(e.retryAfter)}s`;
                 r.changed();
@@ -669,6 +821,6 @@ var plugin = (() => {
   NitroSniper.defaults = { ignoreOwnGiftLinks: false, webhookUrl: "" };
 
   // NitroSniper.entry.js
-  var NitroSniper_entry_default = register({ "id": "mime.nitrosniper", "name": "NitroSniper", "description": "Process new gift links with a deduplicated queue and visible results.", "version": "2.2.2", "authors": [{ "name": "neoarz", "id": "218675193592283137" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NitroSniper" }, NitroSniper);
+  var NitroSniper_entry_default = register({ "id": "mime.nitrosniper", "name": "NitroSniper", "description": "Process new gift links with a deduplicated queue and visible results.", "version": "2.4.0", "authors": [{ "name": "neoarz", "id": "218675193592283137" }, { "name": "Mime | N0_.q3", "id": "957164619061932045" }], "license": "MIT", "source": "https://github.com/xMimiez/Snow-Plugins/tree/main/NitroSniper" }, NitroSniper);
   return __toCommonJS(NitroSniper_entry_exports);
 })();
